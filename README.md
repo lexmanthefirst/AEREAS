@@ -1,12 +1,12 @@
-# AcRev System
+# AEREAS
 
-Academic Review and Evaluation System
+Academic Essay Review and Evaluation Agentic System
 
-AcRev is a backend platform for academic writing review. It evaluates submitted work, produces structured feedback, and can generate a revised draft based on detected issues. The system is designed for student and teacher workflows where writing quality, coherence, argument strength, tone, citations, and originality need to be assessed together.
+AEREAS is a backend platform for academic writing review. It evaluates submitted work, produces structured feedback, and can generate a revised draft based on detected issues. The system is designed for student and teacher workflows where writing quality, coherence, argument strength, tone, citations, and originality need to be assessed together.
 
 ## Overview
 
-AcRev combines rule-based analysis and optional model-assisted analysis in a single service. It processes either raw text or uploaded documents, then returns a consolidated review result that can include:
+AEREAS combines rule-based analysis and optional model-assisted analysis in a single service. It processes either raw text or uploaded documents, then returns a consolidated review result that can include:
 
 - Overall and category-level scores
 - Actionable feedback items
@@ -28,7 +28,7 @@ The platform also supports persistence for review history and reporting so insti
   Documents are accepted through object storage integration, text is extracted, and content is prepared for analysis.
 
 - Review and revise mode
-  In addition to feedback, AcRev can produce a revised draft and summary of edits.
+  In addition to feedback, AEREAS can produce a revised draft and summary of edits.
 
 - Change tracking support
   Sentence-level before and after change data is generated for interfaces that need transparent revision views.
@@ -61,7 +61,7 @@ The platform also supports persistence for review history and reporting so insti
 
 ## Project Scope
 
-AcRev is intended for:
+AEREAS is intended for:
 
 - Academic writing support platforms
 - Instructor feedback workflows
