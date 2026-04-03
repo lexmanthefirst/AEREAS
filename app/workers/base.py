@@ -29,18 +29,17 @@ class BaseWorker(ABC):
     async def run(self, context: EvaluationContext) -> WorkerResult:
         """Execute worker analysis and return result"""
         start = time.perf_counter()
-        
-        # Read document from the blackboard
-        document = context.document_content
-        
-        # Perform specialized evaluation
-        result = await self.evaluate(document)
+        result = await self.evaluate_with_context(context)
         
         # Set timing and worker name
         result.processing_time_ms = (time.perf_counter() - start) * 1000
         result.worker_name = self.name
         
         return result
+
+    async def evaluate_with_context(self, context: EvaluationContext) -> WorkerResult:
+        """Extended hook for workers that need document structure or prior findings."""
+        return await self.evaluate(context.document_content)
     
     @abstractmethod
     async def evaluate(self, document: str) -> WorkerResult:

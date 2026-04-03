@@ -2,6 +2,7 @@ import hashlib
 import re
 from typing import List, Set
 
+from app.core.config import settings
 from app.workers.base import BaseWorker
 from app.models.context import WorkerResult, EvaluationAction, ActionType
 from app.utils.logger import logger
@@ -32,7 +33,7 @@ class PlagiarismWorker(BaseWorker):
         """Load Sentence-BERT model and FAISS index"""
         try:
             from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            self.model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
             
             # Load FAISS index if corpus available
             if self.corpus_path:
@@ -104,7 +105,7 @@ class PlagiarismWorker(BaseWorker):
     async def _check_with_model(self, sentences: List[str]) -> List[dict]:
         """Check sentences against corpus using embeddings"""
         import numpy as np
-        
+
         results = []
         for i, sentence in enumerate(sentences):
             if len(sentence.split()) < 5:

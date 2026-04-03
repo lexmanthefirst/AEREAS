@@ -1,6 +1,7 @@
 import re
 from typing import List
 
+from app.core.config import settings
 from app.workers.base import BaseWorker
 from app.models.context import WorkerResult, EvaluationAction, ActionType
 from app.utils.logger import logger
@@ -38,10 +39,9 @@ class ArgumentationWorker(BaseWorker):
                 "DebertaV2ForSequenceClassification",
             )
             DebertaV2Tokenizer = getattr(transformers, "DebertaV2Tokenizer")
-            # Note: In production, use a fine-tuned model like "chkla/roberta-argument"
-            self.tokenizer = DebertaV2Tokenizer.from_pretrained("microsoft/deberta-v3-base")
+            self.tokenizer = DebertaV2Tokenizer.from_pretrained(settings.ARGUMENTATION_MODEL_NAME)
             self.model = DebertaV2ForSequenceClassification.from_pretrained(
-                "microsoft/deberta-v3-base",
+                settings.ARGUMENTATION_MODEL_NAME,
                 num_labels=3
             )
         except Exception as e:

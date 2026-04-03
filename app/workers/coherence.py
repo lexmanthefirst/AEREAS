@@ -2,6 +2,7 @@ from typing import List
 import numpy as np
 import re
 
+from app.core.config import settings
 from app.workers.base import BaseWorker
 from app.models.context import WorkerResult, EvaluationAction, ActionType
 from app.utils.logger import logger
@@ -37,7 +38,7 @@ class CoherenceWorker(BaseWorker):
 
             sentence_transformers = importlib.import_module("sentence_transformers")
             SentenceTransformer = getattr(sentence_transformers, "SentenceTransformer")
-            self.model = SentenceTransformer("all-MiniLM-L6-v2")
+            self.model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
         except Exception as e:
             logger.warning("Could not load embedding model: %s. Using rule-based fallback.", e)
             self.use_model = False

@@ -1,6 +1,7 @@
 import re
 from typing import List, Optional
 
+from app.core.config import settings
 from app.workers.base import BaseWorker
 from app.models.context import WorkerResult, EvaluationAction, ActionType
 from app.utils.logger import logger
@@ -30,8 +31,8 @@ class GrammarWorker(BaseWorker):
         """Load T5 grammar correction model"""
         try:
             from transformers import T5ForConditionalGeneration, T5Tokenizer
-            self.tokenizer = T5Tokenizer.from_pretrained("vennify/t5-base-grammar-correction")
-            self.model = T5ForConditionalGeneration.from_pretrained("vennify/t5-base-grammar-correction")
+            self.tokenizer = T5Tokenizer.from_pretrained(settings.GRAMMAR_MODEL_NAME)
+            self.model = T5ForConditionalGeneration.from_pretrained(settings.GRAMMAR_MODEL_NAME)
         except Exception as e:
             logger.warning("Could not load T5 model: %s. Using rule-based fallback.", e)
             self.use_model = False

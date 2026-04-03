@@ -1,6 +1,7 @@
 import re
 from typing import List, Tuple
 
+from app.core.config import settings
 from app.workers.base import BaseWorker
 from app.models.context import WorkerResult, EvaluationAction, ActionType
 from app.utils.logger import logger
@@ -30,9 +31,9 @@ class ToneWorker(BaseWorker):
         """Load BERT model for formality classification"""
         try:
             from transformers import BertForSequenceClassification, BertTokenizer
-            self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+            self.tokenizer = BertTokenizer.from_pretrained(settings.TONE_MODEL_NAME)
             self.model = BertForSequenceClassification.from_pretrained(
-                "bert-base-uncased",
+                settings.TONE_MODEL_NAME,
                 num_labels=2  # formal/informal
             )
         except Exception as e:
