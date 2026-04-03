@@ -1,8 +1,9 @@
-from typing import Dict
+from typing import Dict, Any
 from uuid import UUID
 from datetime import datetime
 
 from app.models.context import EvaluationContext, WorkerResult, LiveTriggerType, EvaluationAction
+from app.services.document import DocumentExtractor
 from app.supervisor.synthesis import SynthesisEngine
 from app.workers.grammar import GrammarWorker
 from app.workers.coherence import CoherenceWorker
@@ -11,7 +12,10 @@ from app.workers.tone import ToneWorker
 from app.workers.citation import CitationWorker
 from app.workers.plagiarism import PlagiarismWorker
 from app.workers.critic import CriticWorker
+from app.workers.research import ResearchWorker
+from app.workers.reviewer import ReviewWorker
 from app.utils.logger import logger
+from app.core.config import settings
 
 
 class SupervisorAgent:
@@ -25,11 +29,13 @@ class SupervisorAgent:
     # Scoring weights for each dimension
     WEIGHTS = {
         "grammar_specialist": 0.20,
-        "coherence_specialist": 0.20,
-        "argumentation_specialist": 0.25,
+        "coherence_specialist": 0.15,
+        "argumentation_specialist": 0.20,
         "tone_specialist": 0.10,
         "citation_specialist": 0.10,
-        "plagiarism_specialist": 0.15,
+        "plagiarism_specialist": 0.10,
+        "research_specialist": 0.05,
+        "review_specialist": 0.10,
     }
     
     def __init__(self, use_models: bool = False, use_llm_synthesis: bool = False):
@@ -47,11 +53,18 @@ class SupervisorAgent:
             "tone_specialist": ToneWorker(use_model=use_models),
             "citation_specialist": CitationWorker(),
             "plagiarism_specialist": PlagiarismWorker(use_model=use_models),
+            "research_specialist": ResearchWorker(),
+            "review_specialist": ReviewWorker(),
         }
         self.critic = CriticWorker()
         self.synthesizer = SynthesisEngine(use_llm=use_llm_synthesis)
     
-    async def run_evaluation(self, content: str, document_id: str | None = None) -> EvaluationContext:
+    async def run_evaluation(
+        self,
+        content: str,
+        document_id: str | None = None,
+        document_structure: Dict[str, Any] | None = None,
+    ) -> EvaluationContext:
         """
         Execute complete evaluation cycle.
         
@@ -62,13 +75,17 @@ class SupervisorAgent:
         Returns:
             EvaluationContext with all results.
         """
+        structured = document_structure or DocumentExtractor.parse_text_structure(content)
+        normalized_content = structured["content"]
         # 1. Create evaluation board (whiteboard)
         context_kwargs = {
-            "document_content": content,
+            "document_content": normalized_content,
             "document_metadata": {
-                "word_count": len(content.split()),
-                "char_count": len(content),
+                "word_count": len(normalized_content.split()),
+                "char_count": len(normalized_content),
+                **structured.get("metadata", {}),
             },
+            "document_sections": structured.get("sections", []),
             "status": "in_progress",
         }
         if document_id:
@@ -77,7 +94,18 @@ class SupervisorAgent:
         context = EvaluationContext(**context_kwargs)
         
         # 2. Call each specialist worker
-        for worker_name, worker in self.workers.items():
+        ordered_workers = [
+            "grammar_specialist",
+            "coherence_specialist",
+            "argumentation_specialist",
+            "tone_specialist",
+            "citation_specialist",
+            "plagiarism_specialist",
+            "research_specialist",
+            "review_specialist",
+        ]
+        for worker_name in ordered_workers:
+            worker = self.workers[worker_name]
             try:
                 result: WorkerResult = await worker.run(context)
                 context.worker_results[worker_name] = result
@@ -164,4 +192,24 @@ class SupervisorAgent:
         if weight_sum == 0:
             return 0.0
         
-        return round(total / weight_sum * weight_sum, 2)
+        return round(total / weight_sum, 2)
+
+    def get_runtime_profile(self) -> Dict[str, object]:
+        """Return current runtime mode information for transparency in API responses."""
+        worker_modes: Dict[str, str] = {}
+        for worker_name, worker in self.workers.items():
+            use_model = bool(getattr(worker, "use_model", False))
+            has_model = getattr(worker, "model", None) is not None
+            worker_modes[worker_name] = "model-backed" if (use_model and has_model) else "rule-based"
+
+        llm_synthesis_mode = (
+            "model-backed"
+            if (self.synthesizer.use_llm and getattr(self.synthesizer, "client", None) is not None)
+            else "rule-based"
+        )
+
+        return {
+            "llm_synthesis_mode": llm_synthesis_mode,
+            "worker_modes": worker_modes,
+            "web_research_enabled": settings.ENABLE_WEB_RESEARCH,
+        }
