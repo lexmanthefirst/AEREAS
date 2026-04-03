@@ -27,6 +27,18 @@ class TextSpan(BaseModel):
     text: str = ""          # The actual text content
 
 
+class DocumentSection(BaseModel):
+    """Structured section extracted from the source document."""
+    id: str
+    level: int = 1
+    heading: str
+    parent_id: Optional[str] = None
+    paragraphs: List[str] = Field(default_factory=list)
+    start_offset: int = 0
+    end_offset: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class EvaluationAction(BaseModel):
     """Proposed action from worker or supervisor synthesis"""
     type: ActionType
@@ -81,6 +93,7 @@ class EvaluationContext(BaseModel):
     
     document_content: str = ""
     document_metadata: Dict[str, Any] = Field(default_factory=dict)
+    document_sections: List[DocumentSection] = Field(default_factory=list)
     worker_results: Dict[str, WorkerResult] = Field(default_factory=dict)
     synthesis_reasoning: Optional[str] = None
     final_actions: List[EvaluationAction] = Field(default_factory=list)
