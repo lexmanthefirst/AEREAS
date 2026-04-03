@@ -7,6 +7,7 @@ from app.supervisor.agent import SupervisorAgent
 from app.utils.logger import logger
 from app.middleware.correlation import CorrelationIdMiddleware
 from app.db import engine
+from app.core.config import settings
 
 
 @asynccontextmanager
@@ -15,8 +16,8 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize supervisor
     logger.info("Initializing SupervisorAgent...")
     supervisor = SupervisorAgent(
-        use_models=True,
-        use_llm_synthesis=True,
+        use_models=settings.USE_MODELS,
+        use_llm_synthesis=settings.USE_LLM_SYNTHESIS,
     )
     set_supervisor(supervisor)
     logger.info("SupervisorAgent ready!")
@@ -49,7 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include all routes from the routes package
+
 app.include_router(api_router, prefix="/api/v1")
 
 

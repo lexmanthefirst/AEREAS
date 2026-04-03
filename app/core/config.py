@@ -17,14 +17,30 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
     S3_BUCKET_NAME: str = "documents"
 
-    # Database (for future use)
+    # Database
     DATABASE_URL: Optional[str] = None
     REDIS_URL: str = "redis://localhost:6379"
 
     # LLM Configuration
     GEMINI_API_KEY: Optional[str] = None
-    USE_MODELS: bool = False
-    USE_LLM_SYNTHESIS: bool = False
+    USE_MODELS: bool = True
+    USE_LLM_SYNTHESIS: bool = True
+    SYNTHESIS_MODEL_NAME: str = "gemini-2.5-flash"
+    REVIEW_MODEL_NAME: str = "gemini-2.5-flash"
+    REVISION_MODEL_NAME: str = "gemini-2.5-flash"
+
+    # NLP model identifiers
+    GRAMMAR_MODEL_NAME: str = "vennify/t5-base-grammar-correction"
+    ARGUMENTATION_MODEL_NAME: str = "microsoft/deberta-v3-base"
+    TONE_MODEL_NAME: str = "bert-base-uncased"
+    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+
+    # Research providers
+    ENABLE_WEB_RESEARCH: bool = True
+    WEB_RESEARCH_MAX_QUERIES: int = 3
+    DUCKDUCKGO_API_URL: str = "https://api.duckduckgo.com/"
+    CROSSREF_API_URL: str = "https://api.crossref.org/works"
+    RESEARCH_USER_AGENT: str = "academic-review-system/0.1.0"
 
     class Config:
         env_file = ".env"
