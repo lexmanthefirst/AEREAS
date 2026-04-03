@@ -40,6 +40,7 @@ class RevisionService:
 
         if use_llm and high_priority_actions:
             llm_result = RevisionService._llm_rewrite(
+                context=context,
                 original_content=original,
                 current_revision=revised,
                 high_priority_actions=high_priority_actions,
@@ -54,7 +55,6 @@ class RevisionService:
                 rewrite_summary.append(llm_result["reason"])
             else:
                 rewrite_summary.append("LLM rewrite skipped; rules-based revision retained.")
-            rewrite_summary.append(llm_result["reason"])
 
         similarity = round(SequenceMatcher(None, original, revised).ratio(), 4)
         if not rewrite_summary:
@@ -248,6 +248,7 @@ class RevisionService:
 
     @staticmethod
     def _llm_rewrite(
+        context: EvaluationContext,
         original_content: str,
         current_revision: str,
         high_priority_actions: List[Any],
@@ -271,17 +272,36 @@ class RevisionService:
                     for a in high_priority_actions
                 ]
             )
+            section_text = "\n".join(
+                f"- L{section.level}: {section.heading}"
+                for section in context.document_sections[:12]
+                if section.heading
+            )
+            research_worker = context.worker_results.get("research_specialist")
+            research_text = ""
+            if research_worker:
+                snippets = []
+                for item in research_worker.flagged_items[:3]:
+                    query = item.get("query", "")
+                    sources = item.get("sources", [])
+                    if sources:
+                        top = sources[0]
+                        snippets.append(f"- {query}: {top.get('title', '')} {top.get('url', '')}".strip())
+                if snippets:
+                    research_text = "\n".join(snippets)
 
             prompt = (
                 "You are an academic writing revision assistant. Rewrite the draft to address ONLY the listed "
-                "critical/moderate issues. Preserve meaning, keep citations and claims, and do not invent facts. "
-                "Return only the revised document text.\n\n"
+                "critical/moderate issues. Preserve section headings, preserve meaning, keep citations and claims, "
+                "and do not invent facts. Improve academic polish and clarity. Return only the revised document text.\n\n"
+                f"Section structure:\n{section_text or '- None'}\n\n"
+                f"Research notes:\n{research_text or '- None'}\n\n"
                 f"Issues:\n{actions_text}\n\n"
                 f"Current draft:\n{current_revision}"
             )
 
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model=settings.REVISION_MODEL_NAME,
                 contents=prompt,
             )
             candidate = (getattr(response, "text", "") or "").strip()

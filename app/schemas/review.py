@@ -27,6 +27,8 @@ class EvaluationResponseSchema(BaseModel):
     worker_scores: Dict[str, float]
     actions: List[Dict[str, Any]]
     critic_approved: bool
+    synthesis_reasoning: Optional[str] = None
+    runtime_info: Dict[str, Any] = Field(default_factory=dict)
     processing_time_ms: float
 
 
@@ -38,6 +40,8 @@ class ReviewRevisionResponseSchema(BaseModel):
     worker_scores: Dict[str, float]
     actions: List[Dict[str, Any]]
     critic_approved: bool
+    synthesis_reasoning: Optional[str] = None
+    runtime_info: Dict[str, Any] = Field(default_factory=dict)
     revised_content: str
     revision_mode: str
     rewrite_summary: List[str]

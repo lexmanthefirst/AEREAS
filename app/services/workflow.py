@@ -39,6 +39,23 @@ class ReviewWorkflowService:
         ]
 
     @staticmethod
+    def _runtime_info(context: Any, supervisor: SupervisorAgent) -> Dict[str, Any]:
+        profile = supervisor.get_runtime_profile()
+        worker_stats = {
+            name: {
+                "processing_time_ms": round(result.processing_time_ms, 2),
+                "findings_count": len(result.findings),
+                "flagged_items_count": len(result.flagged_items),
+            }
+            for name, result in context.worker_results.items()
+        }
+        return {
+            **profile,
+            "worker_stats": worker_stats,
+            "document_sections": len(getattr(context, "document_sections", [])),
+        }
+
+    @staticmethod
     def _validate_file(file: UploadFile) -> None:
         if not file.filename:
             raise HTTPException(status_code=400, detail="No filename provided")
@@ -52,7 +69,7 @@ class ReviewWorkflowService:
             )
 
     @staticmethod
-    async def _load_uploaded_content(file: UploadFile) -> str:
+    async def _load_uploaded_document(file: UploadFile) -> Dict[str, Any]:
         storage = get_storage_service()
         filename = file.filename or "unknown"
         file_id = str(uuid.uuid4())
@@ -71,7 +88,8 @@ class ReviewWorkflowService:
         )
         file_data = io.BytesIO(raw_content)
 
-        content = DocumentExtractor.extract_text(file_data, filename)
+        extracted = DocumentExtractor.extract_document(file_data, filename)
+        content = extracted["content"]
         stripped = content.strip()
         logger.info(
             "Extracted content for %s: %d chars",
@@ -91,7 +109,7 @@ class ReviewWorkflowService:
                     f"({len(stripped)} chars)."
                 ),
             )
-        return content
+        return extracted
 
     @staticmethod
     async def evaluate_text(
@@ -99,7 +117,11 @@ class ReviewWorkflowService:
         supervisor: SupervisorAgent,
     ) -> EvaluationResponseSchema:
         start_time = time.perf_counter()
-        context = await supervisor.run_evaluation(content=request.content)
+        structured = DocumentExtractor.parse_text_structure(request.content)
+        context = await supervisor.run_evaluation(
+            content=structured["content"],
+            document_structure=structured,
+        )
         processing_time = (time.perf_counter() - start_time) * 1000
 
         return EvaluationResponseSchema(
@@ -108,6 +130,8 @@ class ReviewWorkflowService:
             worker_scores=context.final_scores,
             actions=ReviewWorkflowService._action_payload(context.final_actions),
             critic_approved=context.critic_review.approved if context.critic_review else True,
+            synthesis_reasoning=context.synthesis_reasoning,
+            runtime_info=ReviewWorkflowService._runtime_info(context, supervisor),
             processing_time_ms=processing_time,
         )
 
@@ -117,7 +141,11 @@ class ReviewWorkflowService:
         supervisor: SupervisorAgent,
     ) -> ReviewRevisionResponseSchema:
         start_time = time.perf_counter()
-        context = await supervisor.run_evaluation(content=request.content)
+        structured = DocumentExtractor.parse_text_structure(request.content)
+        context = await supervisor.run_evaluation(
+            content=structured["content"],
+            document_structure=structured,
+        )
         revision_result = RevisionService.revise_document(context, use_llm=request.use_llm_rewrite)
         processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -136,6 +164,8 @@ class ReviewWorkflowService:
             worker_scores=context.final_scores,
             actions=ReviewWorkflowService._action_payload(context.final_actions),
             critic_approved=context.critic_review.approved if context.critic_review else True,
+            synthesis_reasoning=context.synthesis_reasoning,
+            runtime_info=ReviewWorkflowService._runtime_info(context, supervisor),
             revised_content=revision_result["revised_content"],
             revision_mode=revision_result["revision_mode"],
             rewrite_summary=revision_result["rewrite_summary"],
@@ -154,8 +184,11 @@ class ReviewWorkflowService:
         _ = citation_style
         ReviewWorkflowService._validate_file(file)
         start_time = time.perf_counter()
-        content = await ReviewWorkflowService._load_uploaded_content(file)
-        context = await supervisor.run_evaluation(content=content)
+        extracted = await ReviewWorkflowService._load_uploaded_document(file)
+        context = await supervisor.run_evaluation(
+            content=extracted["content"],
+            document_structure=extracted,
+        )
         processing_time = (time.perf_counter() - start_time) * 1000
 
         return EvaluationResponseSchema(
@@ -164,6 +197,8 @@ class ReviewWorkflowService:
             worker_scores=context.final_scores,
             actions=ReviewWorkflowService._action_payload(context.final_actions),
             critic_approved=context.critic_review.approved if context.critic_review else True,
+            synthesis_reasoning=context.synthesis_reasoning,
+            runtime_info=ReviewWorkflowService._runtime_info(context, supervisor),
             processing_time_ms=processing_time,
         )
 
@@ -179,8 +214,11 @@ class ReviewWorkflowService:
         _ = citation_style
         ReviewWorkflowService._validate_file(file)
         start_time = time.perf_counter()
-        content = await ReviewWorkflowService._load_uploaded_content(file)
-        context = await supervisor.run_evaluation(content=content)
+        extracted = await ReviewWorkflowService._load_uploaded_document(file)
+        context = await supervisor.run_evaluation(
+            content=extracted["content"],
+            document_structure=extracted,
+        )
         revision_result = RevisionService.revise_document(context, use_llm=use_llm_rewrite)
         processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -199,6 +237,8 @@ class ReviewWorkflowService:
             worker_scores=context.final_scores,
             actions=ReviewWorkflowService._action_payload(context.final_actions),
             critic_approved=context.critic_review.approved if context.critic_review else True,
+            synthesis_reasoning=context.synthesis_reasoning,
+            runtime_info=ReviewWorkflowService._runtime_info(context, supervisor),
             revised_content=revision_result["revised_content"],
             revision_mode=revision_result["revision_mode"],
             rewrite_summary=revision_result["rewrite_summary"],
@@ -216,11 +256,14 @@ class ReviewWorkflowService:
         import io
 
         file_data = io.BytesIO(content)
-        text = DocumentExtractor.extract_text(file_data, file.filename or "")
+        extracted = DocumentExtractor.extract_document(file_data, file.filename or "")
+        text = extracted["content"]
 
         return {
             "filename": file.filename,
             "content": text,
             "word_count": len(text.split()),
             "char_count": len(text),
+            "sections": [section.model_dump() for section in extracted["sections"]],
+            "document_metadata": extracted["metadata"],
         }
