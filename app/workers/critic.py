@@ -163,6 +163,8 @@ class CriticWorker:
             "tone_specialist",
             "citation_specialist",
             "plagiarism_specialist",
+            "research_specialist",
+            "review_specialist",
         }
         
         actual_workers = set(context.worker_results.keys())

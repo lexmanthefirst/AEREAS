@@ -7,6 +7,8 @@ from app.workers.tone import ToneWorker
 from app.workers.citation import CitationWorker
 from app.workers.plagiarism import PlagiarismWorker
 from app.workers.critic import CriticWorker
+from app.workers.research import ResearchWorker
+from app.workers.reviewer import ReviewWorker
 
 __all__ = [
     "BaseWorker",
@@ -17,4 +19,6 @@ __all__ = [
     "CitationWorker",
     "PlagiarismWorker",
     "CriticWorker",
+    "ResearchWorker",
+    "ReviewWorker",
 ]
