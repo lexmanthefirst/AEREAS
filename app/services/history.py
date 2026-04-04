@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import desc, func, select
 
 from app.db.models import DocumentRecord, ReviewRecord, RevisionRecord
-from app.db.session import SessionLocal
+from app.db.session import AsyncSessionLocal
 from app.models.context import EvaluationAction, EvaluationContext
 
 
@@ -107,7 +107,7 @@ class HistoryService:
         requester_role: str,
         source_filename: Optional[str] = None,
     ) -> Dict[str, str]:
-        async with SessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             document = DocumentRecord(
                 owner_id=requester_id,
                 owner_role=requester_role,
@@ -147,7 +147,7 @@ class HistoryService:
 
     @staticmethod
     async def get_student_dashboard(user_id: str, limit: int = 20) -> Dict[str, Any]:
-        async with SessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             stmt = (
                 HistoryService._base_review_join_query()
                 .where(DocumentRecord.owner_id == user_id)
@@ -171,7 +171,7 @@ class HistoryService:
 
     @staticmethod
     async def get_teacher_dashboard(teacher_id: Optional[str], limit: int = 50) -> Dict[str, Any]:
-        async with SessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             base_stmt = HistoryService._base_review_join_query()
             if teacher_id:
                 base_stmt = base_stmt.where(DocumentRecord.owner_id == teacher_id)
@@ -199,7 +199,7 @@ class HistoryService:
 
     @staticmethod
     async def get_review_detail(review_id: UUID) -> Dict[str, Any] | None:
-        async with SessionLocal() as session:
+        async with AsyncSessionLocal() as session:
             stmt = (
                 HistoryService._base_review_join_query()
                 .where(ReviewRecord.id == review_id)
