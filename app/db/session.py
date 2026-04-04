@@ -1,47 +1,47 @@
 from collections.abc import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from app.core.config import settings
+from app.db.base import Base
 
+if not settings.DATABASE_URL:
+    raise ValueError("DATABASE_URL must be configured")
 
-def _normalize_database_url(database_url: str) -> str:
-    """Ensure SQLAlchemy async driver format for PostgreSQL URLs."""
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url
-    if database_url.startswith("postgresql://"):
-        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    return database_url
-
-
-DATABASE_URL = _normalize_database_url(
-    settings.DATABASE_URL or "postgresql+asyncpg://user:pass@localhost:5432/evaldb"
-)
-
-engine: AsyncEngine = create_async_engine(
-    DATABASE_URL,
+# Create async engine
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
     pool_pre_ping=True,
-    future=True,
+    future=True
 )
 
-SessionLocal = async_sessionmaker(
-    bind=engine,
+# Create async session factory
+AsyncSessionLocal = async_sessionmaker(
+    engine,
     class_=AsyncSession,
     expire_on_commit=False,
-    autoflush=False,
     autocommit=False,
+    autoflush=False
 )
 
 
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields an AsyncSession (SQLAlchemy 2.0 style)."""
-    async with SessionLocal() as session:
-        yield session
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Dependency to get database session.
+    
+    Yields:
+        AsyncSession: Database session
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
-__all__ = ["engine", "SessionLocal", "get_db_session"]
+async def init_db():
+    """Initialize database tables."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
