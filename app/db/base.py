@@ -165,8 +165,8 @@ class BaseModel(Base):
         return result.scalars().one_or_none()
 
     @classmethod
-    async def fetch_all(cls: type[T], db: AsyncSession, **kwargs: Any) -> Sequence[T]:
-        result = await db.execute(select(cls).filter_by(**kwargs))
+    async def fetch_all(cls: type[T], db: AsyncSession, limit: int = 100, **kwargs: Any) -> Sequence[T]:
+        result = await db.execute(select(cls).filter_by(**kwargs).limit(limit))
         return result.scalars().all()
 
     @classmethod

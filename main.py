@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import api_router, set_supervisor
+from app.routes import api_router
+from app.llm import LLMClient
 from app.supervisor.agent import SupervisorAgent
 from app.utils.logger import logger
 from app.middleware.correlation import CorrelationIdMiddleware
@@ -14,12 +15,16 @@ from app.core.config import settings
 async def lifespan(app: FastAPI):
     """Application lifespan handler"""
     # Startup: Initialize supervisor
+    logger.info("Initializing LLM client...")
+    llm_client = LLMClient()
+    app.state.llm_client = llm_client
+
     logger.info("Initializing SupervisorAgent...")
     supervisor = SupervisorAgent(
-        use_models=settings.USE_MODELS,
+        llm_client=llm_client,
         use_llm_synthesis=settings.USE_LLM_SYNTHESIS,
     )
-    set_supervisor(supervisor)
+    app.state.supervisor = supervisor
     logger.info("SupervisorAgent ready!")
 
     yield
@@ -44,7 +49,7 @@ app.add_middleware(CorrelationIdMiddleware)
 # CORS middleware for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

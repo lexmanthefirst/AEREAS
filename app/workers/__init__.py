@@ -9,6 +9,21 @@ from app.workers.plagiarism import PlagiarismWorker
 from app.workers.critic import CriticWorker
 from app.workers.research import ResearchWorker
 from app.workers.reviewer import ReviewWorker
+from app.workers.schemas import (
+    GrammarIssue,
+    GrammarOutput,
+    CoherenceTransition,
+    CoherenceOutput,
+    ArgumentComponent,
+    ArgumentationOutput,
+    ToneIssue,
+    ToneOutput,
+    ReviewFinding,
+    ReviewOutput,
+    SynthesisAction,
+    SynthesisOutput,
+    CriticLLMOutput,
+)
 
 __all__ = [
     "BaseWorker",
@@ -21,4 +36,17 @@ __all__ = [
     "CriticWorker",
     "ResearchWorker",
     "ReviewWorker",
+    "GrammarIssue",
+    "GrammarOutput",
+    "CoherenceTransition",
+    "CoherenceOutput",
+    "ArgumentComponent",
+    "ArgumentationOutput",
+    "ToneIssue",
+    "ToneOutput",
+    "ReviewFinding",
+    "ReviewOutput",
+    "SynthesisAction",
+    "SynthesisOutput",
+    "CriticLLMOutput",
 ]

@@ -5,7 +5,7 @@ from app.models.context import LiveTriggerType, ActionType
 @pytest.mark.asyncio
 async def test_live_check_grammar():
     # Initialize supervisor without heavy models (uses rule-based fallback)
-    agent = SupervisorAgent(use_models=False, use_llm_synthesis=False)
+    agent = SupervisorAgent(llm_client=None, use_llm_synthesis=False)
     
     # Test sentence check with grammar error
     content = "She have a car."
@@ -19,7 +19,7 @@ async def test_live_check_grammar():
 
 @pytest.mark.asyncio
 async def test_live_check_tone():
-    agent = SupervisorAgent(use_models=False)
+    agent = SupervisorAgent(llm_client=None)
     
     # Test pause with informal language
     # "wanna" and "stuff" -> 2 issues -> formality 0.4 < 0.6 threshold
@@ -39,7 +39,7 @@ async def test_live_check_tone():
 
 @pytest.mark.asyncio
 async def test_live_check_paragraph_trigger():
-    agent = SupervisorAgent(use_models=False)
+    agent = SupervisorAgent(llm_client=None)
     
     # Paragraph trigger should invoke coherence (but we need enough text)
     content = "First sentence. Second sentence."

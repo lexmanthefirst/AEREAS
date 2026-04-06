@@ -1,8 +1,9 @@
-from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Any
-from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActionType(str, Enum):
@@ -64,7 +65,7 @@ class WorkerResult(BaseModel):
     flagged_items: List[Dict[str, Any]] = Field(default_factory=list)  # Specific issues
     proposed_actions: List[EvaluationAction] = Field(default_factory=list)
     processing_time_ms: float = 0.0
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -78,7 +79,7 @@ class CriticReview(BaseModel):
     """Quality control review from CriticWorker"""
     approved: bool = True
     issues: List[Dict[str, Any]] = Field(default_factory=list)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EvaluationContext(BaseModel):
@@ -100,14 +101,10 @@ class EvaluationContext(BaseModel):
     critic_review: Optional[CriticReview] = None
     final_scores: Dict[str, float] = Field(default_factory=dict)
     overall_score: Optional[float] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     status: str = "pending"  # pending, in_progress, completed, failed
 
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat(),
-            UUID: lambda v: str(v),
-        }
-
-
+    model_config = ConfigDict(
+        ser_json_timedelta="iso8601",
+    )

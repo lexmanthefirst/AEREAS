@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.routes.evaluation import router as evaluation_router, set_supervisor
+from app.routes.evaluation import router as evaluation_router
 from app.routes.health import router as health_router
 from app.routes.upload import router as upload_router
 from app.routes.dashboard import router as dashboard_router
@@ -18,5 +18,4 @@ api_router.include_router(dashboard_router)
 
 __all__ = [
     "api_router",
-    "set_supervisor",
 ]

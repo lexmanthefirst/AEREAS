@@ -1,9 +1,10 @@
+import io
 import time
 import uuid
-import io
 from typing import Any, Dict
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.review import (
     EvaluationRequestSchema,
@@ -121,6 +122,7 @@ class ReviewWorkflowService:
         context = await supervisor.run_evaluation(
             content=structured["content"],
             document_structure=structured,
+            citation_style=request.citation_style,
         )
         processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -139,17 +141,22 @@ class ReviewWorkflowService:
     async def review_revise_text(
         request: EvaluationRequestSchema,
         supervisor: SupervisorAgent,
+        session: AsyncSession,
     ) -> ReviewRevisionResponseSchema:
         start_time = time.perf_counter()
         structured = DocumentExtractor.parse_text_structure(request.content)
         context = await supervisor.run_evaluation(
             content=structured["content"],
             document_structure=structured,
+            citation_style=request.citation_style,
         )
-        revision_result = RevisionService.revise_document(context, use_llm=request.use_llm_rewrite)
+        revision_result = await RevisionService.revise_document(
+            context, use_llm=request.use_llm_rewrite, llm_client=supervisor.llm_client,
+        )
         processing_time = (time.perf_counter() - start_time) * 1000
 
         persisted = await HistoryService.persist_review_revision(
+            session=session,
             context=context,
             revision_result=revision_result,
             processing_time_ms=processing_time,
@@ -181,13 +188,13 @@ class ReviewWorkflowService:
         citation_style: str,
         supervisor: SupervisorAgent,
     ) -> EvaluationResponseSchema:
-        _ = citation_style
         ReviewWorkflowService._validate_file(file)
         start_time = time.perf_counter()
         extracted = await ReviewWorkflowService._load_uploaded_document(file)
         context = await supervisor.run_evaluation(
             content=extracted["content"],
             document_structure=extracted,
+            citation_style=citation_style,
         )
         processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -210,19 +217,23 @@ class ReviewWorkflowService:
         requester_role: str,
         use_llm_rewrite: bool,
         supervisor: SupervisorAgent,
+        session: AsyncSession,
     ) -> ReviewRevisionResponseSchema:
-        _ = citation_style
         ReviewWorkflowService._validate_file(file)
         start_time = time.perf_counter()
         extracted = await ReviewWorkflowService._load_uploaded_document(file)
         context = await supervisor.run_evaluation(
             content=extracted["content"],
             document_structure=extracted,
+            citation_style=citation_style,
         )
-        revision_result = RevisionService.revise_document(context, use_llm=use_llm_rewrite)
+        revision_result = await RevisionService.revise_document(
+            context, use_llm=use_llm_rewrite, llm_client=supervisor.llm_client,
+        )
         processing_time = (time.perf_counter() - start_time) * 1000
 
         persisted = await HistoryService.persist_review_revision(
+            session=session,
             context=context,
             revision_result=revision_result,
             processing_time_ms=processing_time,
@@ -252,9 +263,6 @@ class ReviewWorkflowService:
     async def extract_upload(file: UploadFile) -> Dict[str, Any]:
         ReviewWorkflowService._validate_file(file)
         content = await file.read()
-
-        import io
-
         file_data = io.BytesIO(content)
         extracted = DocumentExtractor.extract_document(file_data, file.filename or "")
         text = extracted["content"]

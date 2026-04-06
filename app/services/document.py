@@ -216,31 +216,9 @@ class DocumentExtractor:
 
     @staticmethod
     def _extract_pdf(file_data: io.BytesIO, filename: str) -> Dict[str, Any]:
-        try:
-            import pypdf
-        except ImportError:
-            try:
-                import PyPDF2 as pypdf
-            except ImportError as exc:
-                raise ImportError("pypdf not installed. Run: pip install pypdf") from exc
+        from app.utils.pdf_parser import PDFParser
 
-        file_data.seek(0)
-        reader = pypdf.PdfReader(file_data)
-
-        page_lines: List[str] = []
-        for page in reader.pages:
-            text = page.extract_text() or ""
-            if text.strip():
-                page_lines.extend(text.splitlines())
-                page_lines.append("")
-
-        content = "\n".join(page_lines).strip()
-        if not content:
-            raise ValueError(
-                "No readable text found in PDF. The file may be image-only (scanned). "
-                "Use OCR or upload a text-selectable PDF."
-            )
-
+        content = PDFParser.extract(file_data)
         return DocumentExtractor.parse_text_structure(content, filename=filename)
 
     @staticmethod
