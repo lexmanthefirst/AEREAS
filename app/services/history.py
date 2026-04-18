@@ -2,9 +2,9 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DocumentRecord, ReviewRecord, RevisionRecord
-from app.db.session import AsyncSessionLocal
 from app.models.context import EvaluationAction, EvaluationContext
 
 
@@ -24,7 +24,7 @@ class HistoryService:
         )
 
     @staticmethod
-    async def _score_summary(session, owner_id: Optional[str] = None) -> tuple[int, float]:
+    async def _score_summary(session: AsyncSession, owner_id: Optional[str] = None) -> tuple[int, float]:
         stmt = select(func.count(ReviewRecord.id), func.avg(ReviewRecord.overall_score)).join(
             DocumentRecord, ReviewRecord.document_id == DocumentRecord.id
         )
@@ -100,6 +100,7 @@ class HistoryService:
     @staticmethod
     async def persist_review_revision(
         *,
+        session: AsyncSession,
         context: EvaluationContext,
         revision_result: Dict[str, Any],
         processing_time_ms: float,
@@ -107,106 +108,104 @@ class HistoryService:
         requester_role: str,
         source_filename: Optional[str] = None,
     ) -> Dict[str, str]:
-        async with AsyncSessionLocal() as session:
-            document = DocumentRecord(
-                owner_id=requester_id,
-                owner_role=requester_role,
-                source_filename=source_filename,
-                original_content=context.document_content,
-            )
-            await document.insert(session, flush=True)
+        document = DocumentRecord(
+            owner_id=requester_id,
+            owner_role=requester_role,
+            source_filename=source_filename,
+            original_content=context.document_content,
+        )
+        await document.insert(session, flush=True)
 
-            review = ReviewRecord(
-                document_id=document.id,
-                overall_score=context.overall_score or 0.0,
-                worker_scores=context.final_scores,
-                actions=_serialize_actions(context.final_actions),
-                critic_approved=context.critic_review.approved if context.critic_review else True,
-                processing_time_ms=processing_time_ms,
-            )
-            await review.insert(session, flush=True)
+        review = ReviewRecord(
+            document_id=document.id,
+            overall_score=context.overall_score or 0.0,
+            worker_scores=context.final_scores,
+            actions=_serialize_actions(context.final_actions),
+            critic_approved=context.critic_review.approved if context.critic_review else True,
+            processing_time_ms=processing_time_ms,
+        )
+        await review.insert(session, flush=True)
 
-            revision = RevisionRecord(
-                review_id=review.id,
-                revised_content=revision_result["revised_content"],
-                revision_mode=revision_result["revision_mode"],
-                rewrite_summary=revision_result["rewrite_summary"],
-                quality_metrics=revision_result["quality_metrics"],
-                tracked_changes=revision_result["tracked_changes"],
-                change_summary=revision_result["change_summary"],
-            )
-            await revision.insert(session, flush=False)
+        revision = RevisionRecord(
+            review_id=review.id,
+            revised_content=revision_result["revised_content"],
+            revision_mode=revision_result["revision_mode"],
+            rewrite_summary=revision_result["rewrite_summary"],
+            quality_metrics=revision_result["quality_metrics"],
+            tracked_changes=revision_result["tracked_changes"],
+            change_summary=revision_result["change_summary"],
+        )
+        await revision.insert(session, flush=False)
 
-            await session.commit()
+        await session.commit()
 
-            return {
-                "document_id": str(document.id),
-                "review_id": str(review.id),
-                "revision_id": str(revision.id),
-            }
-
-    @staticmethod
-    async def get_student_dashboard(user_id: str, limit: int = 20) -> Dict[str, Any]:
-        async with AsyncSessionLocal() as session:
-            stmt = (
-                HistoryService._base_review_join_query()
-                .where(DocumentRecord.owner_id == user_id)
-                .order_by(desc(ReviewRecord.created_at))
-                .limit(limit)
-            )
-            rows = (await session.execute(stmt)).all()
-            total_reviews, avg_score = await HistoryService._score_summary(session, owner_id=user_id)
-
-            items = [
-                HistoryService._student_dashboard_row(doc, review, revision)
-                for doc, review, revision in rows
-            ]
-
-            return {
-                "user_id": user_id,
-                "total_reviews": total_reviews,
-                "average_score": avg_score,
-                "recent_reviews": items,
-            }
+        return {
+            "document_id": str(document.id),
+            "review_id": str(review.id),
+            "revision_id": str(revision.id),
+        }
 
     @staticmethod
-    async def get_teacher_dashboard(teacher_id: Optional[str], limit: int = 50) -> Dict[str, Any]:
-        async with AsyncSessionLocal() as session:
-            base_stmt = HistoryService._base_review_join_query()
-            if teacher_id:
-                base_stmt = base_stmt.where(DocumentRecord.owner_id == teacher_id)
+    async def get_student_dashboard(session: AsyncSession, user_id: str, limit: int = 20) -> Dict[str, Any]:
+        stmt = (
+            HistoryService._base_review_join_query()
+            .where(DocumentRecord.owner_id == user_id)
+            .order_by(desc(ReviewRecord.created_at))
+            .limit(limit)
+        )
+        rows = (await session.execute(stmt)).all()
+        total_reviews, avg_score = await HistoryService._score_summary(session, owner_id=user_id)
 
-            rows = (
-                await session.execute(base_stmt.order_by(desc(ReviewRecord.created_at)).limit(limit))
-            ).all()
+        items = [
+            HistoryService._student_dashboard_row(doc, review, revision)
+            for doc, review, revision in rows
+        ]
 
-            total_reviews, avg_score = await HistoryService._score_summary(session, owner_id=teacher_id)
-
-            needs_attention = 0
-            items = []
-            for doc, review, revision in rows:
-                if review.overall_score < 60:
-                    needs_attention += 1
-                items.append(HistoryService._teacher_dashboard_row(doc, review, revision))
-
-            return {
-                "teacher_id": teacher_id,
-                "total_reviews": total_reviews,
-                "average_score": avg_score,
-                "needs_attention_count": needs_attention,
-                "recent_reviews": items,
-            }
+        return {
+            "user_id": user_id,
+            "total_reviews": total_reviews,
+            "average_score": avg_score,
+            "recent_reviews": items,
+        }
 
     @staticmethod
-    async def get_review_detail(review_id: UUID) -> Dict[str, Any] | None:
-        async with AsyncSessionLocal() as session:
-            stmt = (
-                HistoryService._base_review_join_query()
-                .where(ReviewRecord.id == review_id)
-            )
-            row = (await session.execute(stmt)).first()
-            if not row:
-                return None
+    async def get_teacher_dashboard(
+        session: AsyncSession, teacher_id: Optional[str], limit: int = 50
+    ) -> Dict[str, Any]:
+        base_stmt = HistoryService._base_review_join_query()
+        if teacher_id:
+            base_stmt = base_stmt.where(DocumentRecord.owner_id == teacher_id)
 
-            doc, review, revision = row
-            return HistoryService._review_detail_payload(doc, review, revision)
+        rows = (
+            await session.execute(base_stmt.order_by(desc(ReviewRecord.created_at)).limit(limit))
+        ).all()
+
+        total_reviews, avg_score = await HistoryService._score_summary(session, owner_id=teacher_id)
+
+        needs_attention = 0
+        items = []
+        for doc, review, revision in rows:
+            if review.overall_score < 60:
+                needs_attention += 1
+            items.append(HistoryService._teacher_dashboard_row(doc, review, revision))
+
+        return {
+            "teacher_id": teacher_id,
+            "total_reviews": total_reviews,
+            "average_score": avg_score,
+            "needs_attention_count": needs_attention,
+            "recent_reviews": items,
+        }
+
+    @staticmethod
+    async def get_review_detail(session: AsyncSession, review_id: UUID) -> Dict[str, Any] | None:
+        stmt = (
+            HistoryService._base_review_join_query()
+            .where(ReviewRecord.id == review_id)
+        )
+        row = (await session.execute(stmt)).first()
+        if not row:
+            return None
+
+        doc, review, revision = row
+        return HistoryService._review_detail_payload(doc, review, revision)

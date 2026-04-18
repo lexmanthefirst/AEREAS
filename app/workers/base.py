@@ -8,11 +8,12 @@ Each worker:
 """
 
 from abc import ABC, abstractmethod
-import time
+from difflib import SequenceMatcher
 import re
+import time
 from typing import List
 
-from app.models.context import EvaluationContext, WorkerResult
+from app.models.context import EvaluationContext, TextSpan, WorkerResult
 
 
 class BaseWorker(ABC):
@@ -71,3 +72,46 @@ class BaseWorker(ABC):
             return 100.0
         error_rate = error_count / total_items
         return round(max(0, (1 - error_rate) * 100), 2)
+
+    @staticmethod
+    def find_span(document: str, quoted_text: str | None) -> TextSpan | None:
+        """Resolve exact quoted text to character offsets in the document."""
+        if not quoted_text:
+            return None
+        idx = document.find(quoted_text)
+        if idx == -1:
+            return None
+        return TextSpan(start=idx, end=idx + len(quoted_text), text=quoted_text)
+
+    @staticmethod
+    def find_span_fuzzy(
+        document: str,
+        quoted_text: str | None,
+        threshold: float = 0.75,
+    ) -> TextSpan | None:
+        """Fuzzy match when LLM quotes text slightly differently."""
+        if not quoted_text or len(quoted_text) < 10:
+            return None
+
+        # Try exact match first
+        exact = BaseWorker.find_span(document, quoted_text)
+        if exact is not None:
+            return exact
+
+        # Sliding window fuzzy search
+        window = len(quoted_text)
+        best_ratio = 0.0
+        best_start = -1
+
+        step = max(1, window // 4)
+        for start in range(0, len(document) - window + 1, step):
+            candidate = document[start : start + window]
+            ratio = SequenceMatcher(None, quoted_text, candidate).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_start = start
+
+        if best_ratio >= threshold and best_start >= 0:
+            matched = document[best_start : best_start + window]
+            return TextSpan(start=best_start, end=best_start + window, text=matched)
+        return None

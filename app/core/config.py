@@ -1,14 +1,16 @@
-from pydantic_settings import BaseSettings
 from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables"""
+    """Application settings loaded from environment variables."""
 
     # Application
     APP_NAME: str = "Academic Writing Evaluation API"
     APP_VERSION: str = "2.1.0"
     DEBUG: bool = False
+    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     # S3/MinIO Configuration
     S3_ENDPOINT: str = "http://localhost:9000"
@@ -29,11 +31,9 @@ class Settings(BaseSettings):
     REVIEW_MODEL_NAME: str = "gemini-2.5-flash"
     REVISION_MODEL_NAME: str = "gemini-2.5-flash"
 
-    # NLP model identifiers
-    GRAMMAR_MODEL_NAME: str = "vennify/t5-base-grammar-correction"
-    ARGUMENTATION_MODEL_NAME: str = "microsoft/deberta-v3-base"
-    TONE_MODEL_NAME: str = "bert-base-uncased"
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    # Worker LLM
+    WORKER_MODEL_NAME: str = "gemini-2.5-flash"
+    LLM_REQUEST_TIMEOUT: float = 45.0
 
     # Research providers
     ENABLE_WEB_RESEARCH: bool = True
@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     CROSSREF_API_URL: str = "https://api.crossref.org/works"
     RESEARCH_USER_AGENT: str = "academic-review-system/0.1.0"
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
 settings = Settings()

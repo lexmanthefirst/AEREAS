@@ -1,15 +1,39 @@
-from typing import List
+"""Holistic review specialist — LLM-powered with rule-based fallback."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List
 
 from app.core.config import settings
 from app.models.context import ActionType, EvaluationAction, EvaluationContext, WorkerResult
 from app.utils.logger import logger
 from app.workers.base import BaseWorker
+from app.workers.schemas import ReviewOutput
+
+if TYPE_CHECKING:
+    from app.llm.client import LLMClient
 
 
 class ReviewWorker(BaseWorker):
     """Holistic reviewer that consolidates structure, findings, and research."""
 
     name = "review_specialist"
+
+    SYSTEM_PROMPT = (
+        "You are a rigorous academic reviewer performing a holistic assessment of a student's writing.\n"
+        "You will receive the document text along with its section structure and findings from "
+        "specialist workers (grammar, coherence, argumentation, tone, citation, plagiarism, research).\n\n"
+        "Your job:\n"
+        "1. Identify the most critical issues across ALL dimensions.\n"
+        "2. Note genuine strengths worth preserving.\n"
+        "3. Provide specific, actionable suggestions — not vague advice.\n"
+        "4. For each finding, quote the relevant text from the document when possible.\n"
+        "5. Rate severity as: critical (must fix), moderate (should fix), or minor (nice to fix).\n\n"
+        "Score from 0-100 reflecting the overall quality of the academic writing."
+    )
+
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
+        self.llm_client = llm_client
 
     async def evaluate(self, document: str) -> WorkerResult:
         return WorkerResult(
@@ -20,18 +44,96 @@ class ReviewWorker(BaseWorker):
         )
 
     async def evaluate_with_context(self, context: EvaluationContext) -> WorkerResult:
-        if settings.GEMINI_API_KEY:
-            llm_result = self._llm_review(context)
-            if llm_result is not None:
-                return llm_result
+        if self.llm_client and self.llm_client.available:
+            try:
+                return await self._llm_review(context)
+            except Exception as exc:
+                logger.warning("Review LLM failed: %s — falling back to rules.", exc)
         return self._rule_review(context)
+
+    # -- LLM path -------------------------------------------------------------
+
+    async def _llm_review(self, context: EvaluationContext) -> WorkerResult:
+        content = self._build_review_content(context)
+        output: ReviewOutput = await self.llm_client.generate(  # type: ignore[union-attr]
+            system_prompt=self.SYSTEM_PROMPT,
+            content=content,
+            response_schema=ReviewOutput,
+            model_name=settings.REVIEW_MODEL_NAME,
+        )
+
+        actions: List[EvaluationAction] = []
+        findings: List[str] = []
+
+        for f in output.findings[:8]:
+            span = (
+                self.find_span(context.document_content, f.quoted_text)
+                or self.find_span_fuzzy(context.document_content, f.quoted_text)
+                if f.quoted_text
+                else None
+            )
+            severity_map = {
+                "critical": ActionType.CRITICAL_REVISION,
+                "moderate": ActionType.MODERATE_REVISION,
+                "minor": ActionType.MINOR_IMPROVEMENT,
+            }
+            findings.append(f.finding)
+            actions.append(
+                EvaluationAction(
+                    type=severity_map.get(f.severity.lower(), ActionType.MINOR_IMPROVEMENT),
+                    target=f.target,
+                    category="review",
+                    reasoning=f.finding,
+                    confidence=0.8,
+                    suggestion=f.suggestion,
+                    highlight=span,
+                    original_text=f.quoted_text,
+                )
+            )
+
+        if not findings:
+            findings.append("Holistic review completed — no dominant weakness found.")
+
+        return WorkerResult(
+            score=output.score,
+            findings=findings,
+            flagged_items=[f.model_dump() for f in output.findings],
+            proposed_actions=actions[:6],
+            metadata={"mode": "llm", "strengths": output.strengths},
+        )
+
+    def _build_review_content(self, context: EvaluationContext) -> str:
+        parts: List[str] = []
+
+        # Section structure
+        section_summary = "\n".join(
+            f"- L{s.level}: {s.heading} ({len(s.paragraphs)} paragraphs)"
+            for s in context.document_sections[:12]
+        )
+        parts.append(f"## Document Structure\n{section_summary or '- No sections detected'}\n")
+
+        # Worker findings summary
+        worker_lines = []
+        for name, result in context.worker_results.items():
+            if name == self.name:
+                continue
+            top_findings = ", ".join(result.findings[:2]) if result.findings else "No issues"
+            worker_lines.append(f"- {name}: {result.score:.0f}/100 | {top_findings}")
+        parts.append(f"## Specialist Worker Findings\n" + "\n".join(worker_lines) + "\n")
+
+        # Document text (capped)
+        parts.append(f"## Document Text\n{context.document_content[:12000]}")
+
+        return "\n\n".join(parts)
+
+    # -- Rule-based fallback ---------------------------------------------------
 
     def _rule_review(self, context: EvaluationContext) -> WorkerResult:
         findings: List[str] = []
         actions: List[EvaluationAction] = []
 
         sections = context.document_sections
-        body_sections = [section for section in sections if section.paragraphs]
+        body_sections = [s for s in sections if s.paragraphs]
         if len(body_sections) < 3:
             findings.append("Document structure is shallow; stronger section development is needed.")
             actions.append(
@@ -41,14 +143,14 @@ class ReviewWorker(BaseWorker):
                     category="review",
                     reasoning="The work is not clearly developed into major sections and subsections.",
                     confidence=0.78,
-                    suggestion="Reorganize the paper into clear academic sections with focused paragraphs.",
+                    suggestion="Reorganise the paper into clear academic sections with focused paragraphs.",
                 )
             )
 
         low_scores = {
             name: result.score
             for name, result in context.worker_results.items()
-            if result.score < 70 and name not in {self.name}
+            if result.score < 70 and name != self.name
         }
         for worker_name, score in sorted(low_scores.items(), key=lambda item: item[1])[:3]:
             category = worker_name.replace("_specialist", "").replace("_", " ")
@@ -64,12 +166,6 @@ class ReviewWorker(BaseWorker):
                 )
             )
 
-        research_meta = context.worker_results.get("research_specialist")
-        if research_meta and research_meta.metadata.get("web_research_enabled"):
-            findings.append(
-                f"Research review used {research_meta.metadata.get('sources_found', 0)} supporting source candidates."
-            )
-
         score_values = [
             result.score for name, result in context.worker_results.items() if name != self.name
         ]
@@ -83,79 +179,5 @@ class ReviewWorker(BaseWorker):
             findings=findings,
             flagged_items=[{"low_scores": low_scores, "section_count": len(sections)}],
             proposed_actions=actions[:6],
-            metadata={
-                "review_mode": "rules",
-                "section_count": len(sections),
-                "body_sections": len(body_sections),
-            },
+            metadata={"mode": "rules", "section_count": len(sections), "body_sections": len(body_sections)},
         )
-
-    def _llm_review(self, context: EvaluationContext) -> WorkerResult | None:
-        try:
-            from google import genai
-
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            section_summary = "\n".join(
-                f"- L{section.level}: {section.heading} ({len(section.paragraphs)} paragraphs)"
-                for section in context.document_sections[:12]
-            )
-            worker_summary = "\n".join(
-                f"- {name}: {result.score}/100 | {', '.join(result.findings[:2])}"
-                for name, result in context.worker_results.items()
-            )
-            prompt = (
-                "You are a rigorous academic reviewer. Assess the work using the supplied section structure and "
-                "worker findings. Return concise review findings under lines starting with 'FINDING:' and action "
-                "items under lines starting with 'ACTION:'. Each action should be 'ACTION: severity | target | suggestion'.\n\n"
-                f"Sections:\n{section_summary or '- None'}\n\n"
-                f"Worker findings:\n{worker_summary or '- None'}\n\n"
-                f"Document:\n{context.document_content[:10000]}"
-            )
-            response = client.models.generate_content(
-                model=settings.REVIEW_MODEL_NAME,
-                contents=prompt,
-            )
-            text = (getattr(response, "text", "") or "").strip()
-            if not text:
-                return None
-
-            findings = []
-            actions: List[EvaluationAction] = []
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("FINDING:"):
-                    findings.append(stripped.removeprefix("FINDING:").strip())
-                elif stripped.startswith("ACTION:"):
-                    payload = [part.strip() for part in stripped.removeprefix("ACTION:").split("|")]
-                    if len(payload) >= 3:
-                        severity, target, suggestion = payload[:3]
-                        action_type = {
-                            "critical": ActionType.CRITICAL_REVISION,
-                            "moderate": ActionType.MODERATE_REVISION,
-                        }.get(severity.lower(), ActionType.MINOR_IMPROVEMENT)
-                        actions.append(
-                            EvaluationAction(
-                                type=action_type,
-                                target=target,
-                                category="review",
-                                reasoning="Holistic academic review recommendation.",
-                                confidence=0.78,
-                                suggestion=suggestion,
-                            )
-                        )
-
-            if not findings:
-                findings.append("Holistic review completed.")
-
-            score_values = [result.score for result in context.worker_results.values()]
-            score = sum(score_values) / len(score_values) if score_values else 100.0
-            return WorkerResult(
-                score=round(score, 2),
-                findings=findings[:6],
-                flagged_items=[{"raw_review": text}],
-                proposed_actions=actions[:6],
-                metadata={"review_mode": "llm"},
-            )
-        except Exception as exc:
-            logger.warning("LLM holistic review failed: %s", exc)
-            return None

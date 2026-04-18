@@ -1,17 +1,27 @@
+"""RevisionService — builds a revised draft from worker findings."""
+
+from __future__ import annotations
+
 import re
 from difflib import SequenceMatcher
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
-from app.core.config import settings
 from app.models.context import ActionType, EvaluationContext
 from app.utils.logger import logger
+
+if TYPE_CHECKING:
+    from app.llm.client import LLMClient
 
 
 class RevisionService:
     """Build a revised draft from worker findings and synthesized actions."""
 
     @staticmethod
-    def revise_document(context: EvaluationContext, use_llm: bool = True) -> Dict[str, Any]:
+    async def revise_document(
+        context: EvaluationContext,
+        use_llm: bool = True,
+        llm_client: LLMClient | None = None,
+    ) -> Dict[str, Any]:
         original = context.document_content
         revised = context.document_content
         rewrite_summary: List[str] = []
@@ -39,11 +49,12 @@ class RevisionService:
         ]
 
         if use_llm and high_priority_actions:
-            llm_result = RevisionService._llm_rewrite(
+            llm_result = await RevisionService._llm_rewrite(
                 context=context,
                 original_content=original,
                 current_revision=revised,
                 high_priority_actions=high_priority_actions,
+                llm_client=llm_client,
             )
             if llm_result["accepted"]:
                 revised = llm_result["content"]
@@ -101,52 +112,30 @@ class RevisionService:
                             "after_index": after_j,
                             "before_text": before["text"],
                             "after_text": after["text"],
-                            "before_span": {
-                                "start": before["start"],
-                                "end": before["end"],
-                                "text": before["text"],
-                            },
-                            "after_span": {
-                                "start": after["start"],
-                                "end": after["end"],
-                                "text": after["text"],
-                            },
+                            "before_span": {"start": before["start"], "end": before["end"], "text": before["text"]},
+                            "after_span": {"start": after["start"], "end": after["end"], "text": after["text"]},
                             "similarity": 1.0,
                         }
                     )
                     change_summary["unchanged"] += 1
                     change_id += 1
-                continue
 
-            if tag == "replace":
+            elif tag == "replace":
                 pair_count = min(i2 - i1, j2 - j1)
                 for offset in range(pair_count):
-                    before_i = i1 + offset
-                    after_j = j1 + offset
-                    before = before_units[before_i]
-                    after = after_units[after_j]
+                    before = before_units[i1 + offset]
+                    after = after_units[j1 + offset]
                     tracked_changes.append(
                         {
                             "change_id": change_id,
                             "change_type": "modified",
-                            "before_index": before_i,
-                            "after_index": after_j,
+                            "before_index": i1 + offset,
+                            "after_index": j1 + offset,
                             "before_text": before["text"],
                             "after_text": after["text"],
-                            "before_span": {
-                                "start": before["start"],
-                                "end": before["end"],
-                                "text": before["text"],
-                            },
-                            "after_span": {
-                                "start": after["start"],
-                                "end": after["end"],
-                                "text": after["text"],
-                            },
-                            "similarity": round(
-                                SequenceMatcher(None, before["text"], after["text"]).ratio(),
-                                4,
-                            ),
+                            "before_span": {"start": before["start"], "end": before["end"], "text": before["text"]},
+                            "after_span": {"start": after["start"], "end": after["end"], "text": after["text"]},
+                            "similarity": round(SequenceMatcher(None, before["text"], after["text"]).ratio(), 4),
                         }
                     )
                     change_summary["modified"] += 1
@@ -162,11 +151,7 @@ class RevisionService:
                             "after_index": None,
                             "before_text": before["text"],
                             "after_text": None,
-                            "before_span": {
-                                "start": before["start"],
-                                "end": before["end"],
-                                "text": before["text"],
-                            },
+                            "before_span": {"start": before["start"], "end": before["end"], "text": before["text"]},
                             "after_span": None,
                             "similarity": 0.0,
                         }
@@ -185,19 +170,14 @@ class RevisionService:
                             "before_text": None,
                             "after_text": after["text"],
                             "before_span": None,
-                            "after_span": {
-                                "start": after["start"],
-                                "end": after["end"],
-                                "text": after["text"],
-                            },
+                            "after_span": {"start": after["start"], "end": after["end"], "text": after["text"]},
                             "similarity": 0.0,
                         }
                     )
                     change_summary["added"] += 1
                     change_id += 1
-                continue
 
-            if tag == "delete":
+            elif tag == "delete":
                 for before_i in range(i1, i2):
                     before = before_units[before_i]
                     tracked_changes.append(
@@ -208,20 +188,15 @@ class RevisionService:
                             "after_index": None,
                             "before_text": before["text"],
                             "after_text": None,
-                            "before_span": {
-                                "start": before["start"],
-                                "end": before["end"],
-                                "text": before["text"],
-                            },
+                            "before_span": {"start": before["start"], "end": before["end"], "text": before["text"]},
                             "after_span": None,
                             "similarity": 0.0,
                         }
                     )
                     change_summary["removed"] += 1
                     change_id += 1
-                continue
 
-            if tag == "insert":
+            elif tag == "insert":
                 for after_j in range(j1, j2):
                     after = after_units[after_j]
                     tracked_changes.append(
@@ -233,11 +208,7 @@ class RevisionService:
                             "before_text": None,
                             "after_text": after["text"],
                             "before_span": None,
-                            "after_span": {
-                                "start": after["start"],
-                                "end": after["end"],
-                                "text": after["text"],
-                            },
+                            "after_span": {"start": after["start"], "end": after["end"], "text": after["text"]},
                             "similarity": 0.0,
                         }
                     )
@@ -247,30 +218,25 @@ class RevisionService:
         return tracked_changes, change_summary
 
     @staticmethod
-    def _llm_rewrite(
+    async def _llm_rewrite(
         context: EvaluationContext,
         original_content: str,
         current_revision: str,
         high_priority_actions: List[Any],
+        llm_client: LLMClient | None = None,
     ) -> Dict[str, Any]:
-        if not settings.GEMINI_API_KEY:
+        if not llm_client or not llm_client.available:
             return {
                 "accepted": False,
                 "content": current_revision,
-                "reason": "No GEMINI_API_KEY configured.",
+                "reason": "No LLM client available for rewrite.",
                 "similarity": round(SequenceMatcher(None, original_content, current_revision).ratio(), 4),
             }
 
         try:
-            from google import genai
-
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-
             actions_text = "\n".join(
-                [
-                    f"- [{a.type.value}] {a.category}: {a.reasoning}. Suggestion: {a.suggestion or 'N/A'}"
-                    for a in high_priority_actions
-                ]
+                f"- [{a.type.value}] {a.category}: {a.reasoning}. Suggestion: {a.suggestion or 'N/A'}"
+                for a in high_priority_actions
             )
             section_text = "\n".join(
                 f"- L{section.level}: {section.heading}"
@@ -290,21 +256,26 @@ class RevisionService:
                 if snippets:
                     research_text = "\n".join(snippets)
 
-            prompt = (
+            system_prompt = (
                 "You are an academic writing revision assistant. Rewrite the draft to address ONLY the listed "
                 "critical/moderate issues. Preserve section headings, preserve meaning, keep citations and claims, "
-                "and do not invent facts. Improve academic polish and clarity. Return only the revised document text.\n\n"
+                "and do not invent facts. Improve academic polish and clarity. Return only the revised document text."
+            )
+            content = (
                 f"Section structure:\n{section_text or '- None'}\n\n"
                 f"Research notes:\n{research_text or '- None'}\n\n"
                 f"Issues:\n{actions_text}\n\n"
                 f"Current draft:\n{current_revision}"
             )
 
-            response = client.models.generate_content(
-                model=settings.REVISION_MODEL_NAME,
-                contents=prompt,
+            from app.core.config import settings
+
+            candidate = await llm_client.generate(
+                system_prompt=system_prompt,
+                content=content,
+                model_name=settings.REVISION_MODEL_NAME,
             )
-            candidate = (getattr(response, "text", "") or "").strip()
+            candidate = str(candidate).strip()
 
             if not candidate:
                 return {
@@ -356,7 +327,6 @@ class RevisionService:
     def _apply_tone_revisions(document: str, flagged_items: List[Dict]) -> str:
         revised = document
 
-        # Deterministic substitutions for common academic-tone improvements.
         replacements = {
             r"\bwanna\b": "want to",
             r"\bgonna\b": "going to",
@@ -405,12 +375,6 @@ class RevisionService:
             start = match.start() + leading
             end = match.end() - trailing
 
-            units.append(
-                {
-                    "text": stripped,
-                    "start": start,
-                    "end": end,
-                }
-            )
+            units.append({"text": stripped, "start": start, "end": end})
 
         return units

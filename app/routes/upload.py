@@ -1,5 +1,7 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import get_db
 from app.schemas.review import EvaluationResponseSchema, ReviewRevisionResponseSchema
 from app.services.workflow import ReviewWorkflowService
 from app.routes.evaluation import get_supervisor
@@ -16,17 +18,7 @@ async def upload_and_evaluate(
     citation_style: str = Form(default="harvard", description="Citation style"),
     supervisor: SupervisorAgent = Depends(get_supervisor),
 ):
-    """
-    Upload a document file and evaluate it.
-    
-    Supported formats:
-    - .txt (plain text)
-    - .md (markdown)
-    - .docx (Microsoft Word)
-    - .pdf (PDF document)
-    
-    The file is stored in MinIO/S3 and text is extracted for evaluation.
-    """
+    """Upload a document file and evaluate it."""
     try:
         return await ReviewWorkflowService.evaluate_upload(
             file=file,
@@ -34,19 +26,15 @@ async def upload_and_evaluate(
             supervisor=supervisor,
         )
 
-    except HTTPException as e:
-        logger.warning("Upload failed for %s: %s", file.filename, e.detail)
+    except HTTPException:
         raise
-    
+
     except ValueError as e:
         logger.warning("Upload parsing failed for %s: %s", file.filename, e)
         raise HTTPException(status_code=400, detail=str(e))
-    except ImportError as e:
-        logger.error("Upload dependency error for %s: %s", file.filename, e)
-        raise HTTPException(status_code=500, detail=f"Missing dependency: {str(e)}")
-    except Exception as e:
+    except Exception:
         logger.exception("Upload evaluation failed for %s", file.filename)
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Evaluation failed")
 
 
 @router.post("/upload/review-revise", response_model=ReviewRevisionResponseSchema)
@@ -60,6 +48,7 @@ async def upload_review_and_revise(
         description="Enable LLM rewrite for critical/moderate issues",
     ),
     supervisor: SupervisorAgent = Depends(get_supervisor),
+    session: AsyncSession = Depends(get_db),
 ):
     """Upload a document, return feedback, and produce a revised draft."""
     try:
@@ -70,41 +59,34 @@ async def upload_review_and_revise(
             requester_role=requester_role,
             use_llm_rewrite=use_llm_rewrite,
             supervisor=supervisor,
+            session=session,
         )
 
-    except HTTPException as e:
-        logger.warning("Review-revise upload failed for %s: %s", file.filename, e.detail)
+    except HTTPException:
         raise
 
     except ValueError as e:
         logger.warning("Review-revise parsing failed for %s: %s", file.filename, e)
         raise HTTPException(status_code=400, detail=str(e))
-    except ImportError as e:
-        logger.error("Review-revise dependency error for %s: %s", file.filename, e)
-        raise HTTPException(status_code=500, detail=f"Missing dependency: {str(e)}")
-    except Exception as e:
+    except Exception:
         logger.exception("Review-revise upload failed for %s", file.filename)
-        raise HTTPException(status_code=500, detail=f"Review and revision failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Review and revision failed")
 
 
 @router.post("/upload/extract")
 async def upload_and_extract_only(
     file: UploadFile = File(..., description="Document file to extract text from"),
 ):
-    """
-    Upload a document and return extracted text only (no evaluation).
-    Useful for previewing what will be evaluated.
-    """
+    """Upload a document and return extracted text only (no evaluation)."""
     try:
         return await ReviewWorkflowService.extract_upload(file=file)
 
-    except HTTPException as e:
-        logger.warning("Extract-only upload failed for %s: %s", file.filename, e.detail)
+    except HTTPException:
         raise
-    
+
     except ValueError as e:
         logger.warning("Extract-only parsing failed for %s: %s", file.filename, e)
         raise HTTPException(status_code=400, detail=str(e))
-    except ImportError as e:
-        logger.error("Extract-only dependency error for %s: %s", file.filename, e)
-        raise HTTPException(status_code=500, detail=f"Missing dependency: {str(e)}")
+    except Exception:
+        logger.exception("Extract-only upload failed for %s", file.filename)
+        raise HTTPException(status_code=500, detail="Text extraction failed")

@@ -1,12 +1,14 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.context import LiveTriggerType
 
 
 class EvaluationRequestSchema(BaseModel):
     """Request payload for evaluation and review-revise text endpoints."""
+
+    model_config = ConfigDict(extra="forbid")
 
     content: str = Field(..., min_length=10, description="Document text to evaluate")
     citation_style: str = Field(default="harvard", description="Citation style (harvard, apa)")
@@ -53,6 +55,8 @@ class ReviewRevisionResponseSchema(BaseModel):
 
 class LiveEvaluationRequestSchema(BaseModel):
     """Request payload for live evaluation endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
 
     content: str = Field(..., description="Current text content")
     trigger: LiveTriggerType = Field(..., description="Event that triggered the check")
