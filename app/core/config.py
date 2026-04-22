@@ -23,17 +23,24 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
     REDIS_URL: str = "redis://localhost:6379"
 
-    # LLM Configuration
-    GEMINI_API_KEY: Optional[str] = None
+    # LLM Configuration (OpenRouter)
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    # Optional attribution headers recommended by OpenRouter.
+    OPENROUTER_SITE_URL: Optional[str] = None
+    OPENROUTER_APP_NAME: Optional[str] = None
+
     USE_MODELS: bool = True
     USE_LLM_SYNTHESIS: bool = True
-    SYNTHESIS_MODEL_NAME: str = "gemini-2.5-flash"
-    REVIEW_MODEL_NAME: str = "gemini-2.5-flash"
-    REVISION_MODEL_NAME: str = "gemini-2.5-flash"
+    # Fast/cheap models for the two big-prompt jobs (review, synthesis);
+    # Sonnet is reserved for specialist workers + revision where quality matters.
+    SYNTHESIS_MODEL_NAME: str = "openai/gpt-4o-mini"
+    REVIEW_MODEL_NAME: str = "anthropic/claude-haiku-4.5"
+    REVISION_MODEL_NAME: str = "anthropic/claude-sonnet-4.5"
 
     # Worker LLM
-    WORKER_MODEL_NAME: str = "gemini-2.5-flash"
-    LLM_REQUEST_TIMEOUT: float = 45.0
+    WORKER_MODEL_NAME: str = "anthropic/claude-sonnet-4.5"
+    LLM_REQUEST_TIMEOUT: float = 120.0
 
     # Research providers
     ENABLE_WEB_RESEARCH: bool = True

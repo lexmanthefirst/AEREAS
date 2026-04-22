@@ -7,15 +7,26 @@ from app.llm.client import LLMClient
 from app.workers.schemas import GrammarOutput
 
 
+def _mock_chat_response(text: str) -> MagicMock:
+    """Build a fake OpenAI ChatCompletion response with a single choice."""
+    message = MagicMock()
+    message.content = text
+    choice = MagicMock()
+    choice.message = message
+    response = MagicMock()
+    response.choices = [choice]
+    return response
+
+
 def test_client_unavailable_without_api_key():
-    with patch.dict("os.environ", {"GEMINI_API_KEY": ""}, clear=False):
+    with patch.dict("os.environ", {"OPENROUTER_API_KEY": ""}, clear=False):
         client = LLMClient(api_key="")
         assert client.available is False
 
 
 def test_client_available_with_api_key():
-    mock_genai = MagicMock()
-    with patch.dict("sys.modules", {"google": MagicMock(), "google.genai": mock_genai}):
+    mock_openai_module = MagicMock()
+    with patch.dict("sys.modules", {"openai": mock_openai_module}):
         client = LLMClient(api_key="test-key-123")
         assert client.available is True
 
@@ -36,10 +47,11 @@ async def test_generate_structured_output():
     client = LLMClient(api_key="")
     client._available = True
     client._client = MagicMock()
-
-    mock_response = MagicMock()
-    mock_response.text = '{"issues": [], "overall_assessment": "Good", "score": 90.0}'
-    client._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+    client._client.chat.completions.create = AsyncMock(
+        return_value=_mock_chat_response(
+            '{"issues": [], "overall_assessment": "Good", "score": 90.0}'
+        )
+    )
 
     result = await client.generate(
         system_prompt="Check grammar",
@@ -51,6 +63,11 @@ async def test_generate_structured_output():
     assert result.score == 90.0
     assert result.issues == []
 
+    # json_schema response_format should have been requested.
+    call_kwargs = client._client.chat.completions.create.await_args.kwargs
+    assert call_kwargs["response_format"]["type"] == "json_schema"
+    assert call_kwargs["response_format"]["json_schema"]["name"] == "GrammarOutput"
+
 
 @pytest.mark.asyncio
 async def test_generate_plain_text():
@@ -58,10 +75,9 @@ async def test_generate_plain_text():
     client = LLMClient(api_key="")
     client._available = True
     client._client = MagicMock()
-
-    mock_response = MagicMock()
-    mock_response.text = "The document is well written."
-    client._client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+    client._client.chat.completions.create = AsyncMock(
+        return_value=_mock_chat_response("The document is well written.")
+    )
 
     result = await client.generate(
         system_prompt="Review this",
@@ -78,15 +94,8 @@ async def test_generate_retries_on_empty_response():
     client = LLMClient(api_key="")
     client._available = True
     client._client = MagicMock()
-
-    empty_response = MagicMock()
-    empty_response.text = ""
-
-    good_response = MagicMock()
-    good_response.text = "Valid response."
-
-    client._client.aio.models.generate_content = AsyncMock(
-        side_effect=[empty_response, good_response]
+    client._client.chat.completions.create = AsyncMock(
+        side_effect=[_mock_chat_response(""), _mock_chat_response("Valid response.")]
     )
 
     result = await client.generate(
@@ -96,4 +105,4 @@ async def test_generate_retries_on_empty_response():
     )
 
     assert result == "Valid response."
-    assert client._client.aio.models.generate_content.call_count == 2
+    assert client._client.chat.completions.create.call_count == 2
