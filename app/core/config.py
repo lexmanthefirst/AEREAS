@@ -24,15 +24,20 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
 
     # LLM Configuration
+    LLM_PROVIDER: str = "openrouter"
     GEMINI_API_KEY: Optional[str] = None
     USE_MODELS: bool = True
     USE_LLM_SYNTHESIS: bool = True
-    SYNTHESIS_MODEL_NAME: str = "gemini-2.5-flash"
-    REVIEW_MODEL_NAME: str = "gemini-2.5-flash"
-    REVISION_MODEL_NAME: str = "gemini-2.5-flash"
+    SYNTHESIS_MODEL_NAME: str = "openai/gpt-4.1-mini"
+    REVIEW_MODEL_NAME: str = "openai/gpt-4.1-mini"
+    REVISION_MODEL_NAME: str = "openai/gpt-4.1-mini"
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_HTTP_REFERER: Optional[str] = None
+    OPENROUTER_X_TITLE: str = "Academic Writing Evaluation API"
 
     # Worker LLM
-    WORKER_MODEL_NAME: str = "gemini-2.5-flash"
+    WORKER_MODEL_NAME: str = "openai/gpt-4.1-mini"
     LLM_REQUEST_TIMEOUT: float = 45.0
 
     # Research providers

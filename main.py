@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown: Cleanup
+    await llm_client.aclose()
     await engine.dispose()
     logger.info("Shutting down...")
 
