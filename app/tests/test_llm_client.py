@@ -1,39 +1,45 @@
-"""Tests for LLMClient — validates init, availability, and structured output parsing."""
+"""Tests for LLMClient: init, availability, provider routing, and parsing."""
+
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.llm.client import LLMClient
 from app.workers.schemas import GrammarOutput
 
 
 def test_client_unavailable_without_api_key():
-    with patch.dict("os.environ", {"GEMINI_API_KEY": ""}, clear=False):
-        client = LLMClient(api_key="")
-        assert client.available is False
+    client = LLMClient(api_key="", provider="gemini")
+    assert client.available is False
 
 
-def test_client_available_with_api_key():
+def test_gemini_client_available_with_api_key():
+    mock_google = MagicMock()
     mock_genai = MagicMock()
-    with patch.dict("sys.modules", {"google": MagicMock(), "google.genai": mock_genai}):
-        client = LLMClient(api_key="test-key-123")
+    mock_google.genai = mock_genai
+    with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+        client = LLMClient(api_key="test-key-123", provider="gemini")
         assert client.available is True
+        assert client.provider == "gemini"
+
+
+def test_openrouter_client_available_with_api_key():
+    client = LLMClient(api_key="test-key-123", provider="openrouter")
+    assert client.available is True
+    assert client.provider == "openrouter"
 
 
 @pytest.mark.asyncio
 async def test_generate_raises_when_unavailable():
-    client = LLMClient(api_key="")
+    client = LLMClient(api_key="", provider="gemini")
     with pytest.raises(RuntimeError, match="not available"):
-        await client.generate(
-            system_prompt="test",
-            content="test",
-        )
+        await client.generate(system_prompt="test", content="test")
 
 
 @pytest.mark.asyncio
-async def test_generate_structured_output():
-    """Verify structured output is parsed into a Pydantic model."""
-    client = LLMClient(api_key="")
+async def test_generate_structured_output_gemini():
+    client = LLMClient(api_key="", provider="gemini")
     client._available = True
     client._client = MagicMock()
 
@@ -53,9 +59,8 @@ async def test_generate_structured_output():
 
 
 @pytest.mark.asyncio
-async def test_generate_plain_text():
-    """Verify plain text output when no schema is provided."""
-    client = LLMClient(api_key="")
+async def test_generate_plain_text_gemini():
+    client = LLMClient(api_key="", provider="gemini")
     client._available = True
     client._client = MagicMock()
 
@@ -74,8 +79,7 @@ async def test_generate_plain_text():
 
 @pytest.mark.asyncio
 async def test_generate_retries_on_empty_response():
-    """Verify retry logic when LLM returns empty text."""
-    client = LLMClient(api_key="")
+    client = LLMClient(api_key="", provider="gemini")
     client._available = True
     client._client = MagicMock()
 
@@ -97,3 +101,38 @@ async def test_generate_retries_on_empty_response():
 
     assert result == "Valid response."
     assert client._client.aio.models.generate_content.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openrouter_structured_output():
+    client = LLMClient(api_key="test-key-123", provider="openrouter")
+    client._available = True
+    client._client = MagicMock()
+
+    response_payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps({
+                        "issues": [],
+                        "overall_assessment": "Good",
+                        "score": 92.0,
+                    })
+                }
+            }
+        ]
+    }
+    client._client.post = AsyncMock(return_value=MagicMock(
+        json=MagicMock(return_value=response_payload),
+        raise_for_status=MagicMock(),
+    ))
+
+    result = await client.generate(
+        system_prompt="Check grammar",
+        content="This is a test.",
+        response_schema=GrammarOutput,
+    )
+
+    assert isinstance(result, GrammarOutput)
+    assert result.score == 92.0
+    assert client._client.post.await_count == 1
