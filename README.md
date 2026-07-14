@@ -94,4 +94,4 @@ You can then use the interactive API documentation in your local environment to 
 
 ## License
 
-MIT
+[MIT](LICENSE.txt)
