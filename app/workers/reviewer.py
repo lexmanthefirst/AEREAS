@@ -177,7 +177,10 @@ class ReviewWorker(BaseWorker):
             doc_content = context.document_content or ""
             doc_lower = doc_content.lower()
             reference_headers = ['references', 'bibliography', 'works cited', 'reference list', 'sources', 'citations']
-            has_ref_section = any(h in doc_lower for h in reference_headers)
+            has_ref_section = any(
+                any(line.strip() == h for line in doc_lower.splitlines())
+                for h in reference_headers
+            )
             if citations_count == 0 and not has_ref_section:
                 has_citations = False
 

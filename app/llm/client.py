@@ -30,7 +30,7 @@ class LLMClient:
         provider: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        self._provider = (provider or settings.LLM_PROVIDER or "gemini").strip().lower()
+        self._provider = (provider or getattr(settings, "LLM_PROVIDER", "gemini")).strip().lower()
         self._api_key = api_key or self._resolve_api_key(self._provider)
 
         # Robust auto-correction to direct GPT model references to the adopted Anthropic model
@@ -45,11 +45,11 @@ class LLMClient:
         
         effective = self._effective_provider()
         if effective == "qwen":
-            self._base_url = base_url or settings.DASHSCOPE_BASE_URL
+            self._base_url = base_url or getattr(settings, "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/api/v1")
         elif effective == "openai":
-            self._base_url = base_url or settings.OPENAI_BASE_URL
+            self._base_url = base_url or getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1")
         else:
-            self._base_url = base_url or settings.OPENROUTER_BASE_URL
+            self._base_url = base_url or getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
         self._init_client()
 
@@ -207,7 +207,10 @@ class LLMClient:
                 continue
             except Exception as exc:
                 err_str = str(exc).lower()
-                is_transient = any(code in err_str for code in ("429", "500", "503", "rate", "timeout"))
+                is_transient = (
+                    isinstance(exc, httpx.RequestError) or
+                    any(code in err_str for code in ("429", "500", "502", "503", "504", "rate", "timeout"))
+                )
                 if is_transient and attempt <= max_retries:
                     import re
                     wait = 2.0 ** (attempt - 1)
@@ -278,7 +281,7 @@ class LLMClient:
                 "type": "json_schema",
                 "json_schema": {
                     "name": response_schema.__name__,
-                    "strict": True,
+                    "strict": self.provider == "openai",
                     "schema": schema_dict,
                 },
             }
@@ -314,7 +317,9 @@ class LLMClient:
 
     def _normalize_model_name(self, model: str) -> str:
         if self.provider == "gemini":
-            if "/" in model or not model.startswith("gemini"):
+            if "/" in model:
+                model = model.split("/")[-1]
+            if not model.startswith("gemini"):
                 return self._default_model or "gemini-2.5-flash"
             return model
         if self.provider == "qwen":
