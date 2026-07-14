@@ -127,7 +127,7 @@ class SupervisorAgent:
         context.final_scores = {
             name: result.score for name, result in context.worker_results.items()
         }
-        context.overall_score = self._calculate_overall_score(context.final_scores)
+        context.overall_score = self._calculate_overall_score(context.final_scores, context)
 
         # 5. Critic QA review
         context.critic_review = await self.critic.review(context)
@@ -164,13 +164,37 @@ class SupervisorAgent:
 
         return actions
 
-    def _calculate_overall_score(self, scores: Dict[str, float]) -> float:
+    def _calculate_overall_score(self, scores: Dict[str, float], context: EvaluationContext | None = None) -> float:
         total = 0.0
         weight_sum = 0.0
+        
+        # Check if research is enabled
+        research_enabled = settings.ENABLE_WEB_RESEARCH
+        
+        # Check if citations are present in the document
+        has_citations = True
+        if context and "citation_specialist" in context.worker_results:
+            cit_res = context.worker_results["citation_specialist"]
+            citations_count = cit_res.metadata.get("citations_found", 0) if cit_res.metadata else 0
+            doc_content = context.document_content or ""
+            doc_lower = doc_content.lower()
+            reference_headers = ['references', 'bibliography', 'works cited', 'reference list', 'sources', 'citations']
+            has_ref_section = any(h in doc_lower for h in reference_headers)
+            if citations_count == 0 and not has_ref_section:
+                has_citations = False
+
         for worker_name, weight in self.WEIGHTS.items():
             if worker_name in scores:
+                if worker_name == "research_specialist" and not research_enabled:
+                    continue
+                if worker_name == "citation_specialist" and not has_citations:
+                    continue
+                if worker_name == "plagiarism_specialist" and scores[worker_name] >= 90.0:
+                    continue
+                    
                 total += scores[worker_name] * weight
                 weight_sum += weight
+                
         if weight_sum == 0:
             return 0.0
         return round(total / weight_sum, 2)

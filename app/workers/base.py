@@ -63,7 +63,12 @@ class BaseWorker(ABC):
     
     def _split_paragraphs(self, text: str) -> List[str]:
         """Split text into paragraphs"""
-        paragraphs = text.split('\n\n')
+        # Split by double newlines (handles \n\s*\n and \r\n)
+        paragraphs = re.split(r'\n\s*\n', text.strip())
+        if len(paragraphs) <= 1 and len(text) > 100:
+            single_paragraphs = text.split('\n')
+            if len(single_paragraphs) > 1:
+                paragraphs = single_paragraphs
         return [p.strip() for p in paragraphs if p.strip()]
     
     def _calculate_score(self, total_items: int, error_count: int) -> float:

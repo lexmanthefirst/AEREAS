@@ -37,7 +37,7 @@ class PlagiarismWorker(BaseWorker):
 
         score = self._calculate_originality_score(
             total_sentences=len(sentences),
-            flagged_count=len([f for f in flagged_items if f.get("severity") == ActionType.CRITICAL_REVISION]),
+            flagged_items=flagged_items,
         )
 
         if not findings:
@@ -158,8 +158,20 @@ class PlagiarismWorker(BaseWorker):
                 uncited.append(sentence)
         return uncited
 
-    def _calculate_originality_score(self, total_sentences: int, flagged_count: int) -> float:
+    def _calculate_originality_score(self, total_sentences: int, flagged_items: List[dict]) -> float:
         if total_sentences == 0:
             return 100.0
-        originality = (total_sentences - flagged_count) / total_sentences
-        return round(originality * 100, 2)
+        
+        # Deduct based on severity of each flagged item
+        deductions = 0.0
+        for item in flagged_items:
+            severity = item.get("severity")
+            if severity == ActionType.CRITICAL_REVISION:
+                deductions += 30.0
+            elif severity == ActionType.MODERATE_REVISION:
+                deductions += 10.0
+            elif severity == ActionType.MINOR_IMPROVEMENT:
+                deductions += 3.0
+                
+        score = max(0.0, 100.0 - deductions)
+        return round(score, 2)

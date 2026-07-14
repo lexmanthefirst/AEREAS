@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List
 
-from app.core.config import settings
 from app.models.context import ActionType, EvaluationAction, EvaluationContext, SynthesisResult
 from app.utils.logger import logger
 from app.workers.base import BaseWorker
@@ -60,7 +59,6 @@ class SynthesisEngine:
             system_prompt=self.SYSTEM_PROMPT,
             content=prompt,
             response_schema=SynthesisOutput,
-            model_name=settings.SYNTHESIS_MODEL_NAME,
         )
 
         actions: List[EvaluationAction] = []
