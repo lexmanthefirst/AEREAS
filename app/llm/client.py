@@ -1,15 +1,12 @@
-"""Shared async LLM client for all workers and services.
-
-Backed by OpenRouter via the OpenAI-compatible Chat Completions API.
-Structured output is requested with `response_format={"type": "json_schema", ...}`
-and the raw JSON is validated against the caller's Pydantic schema.
-"""
+"""Shared async LLM client for all workers and services."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Type, TypeVar
 
+import httpx
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -17,83 +14,147 @@ from app.utils.logger import logger
 
 T = TypeVar("T", bound=BaseModel)
 
-# Keywords Anthropic (via OpenRouter) rejects on `number`/`integer` fields in
-# structured-output schemas. Pydantic still enforces these on our side when we
-# validate the returned JSON, so stripping them from the wire schema is safe.
-_UNSUPPORTED_SCHEMA_KEYS = (
-    "minimum",
-    "maximum",
-    "exclusiveMinimum",
-    "exclusiveMaximum",
-    "multipleOf",
-)
-
-
-def _sanitize_schema(schema: Any) -> Any:
-    """Recursively remove schema keywords that some providers reject."""
-    if isinstance(schema, dict):
-        return {
-            k: _sanitize_schema(v)
-            for k, v in schema.items()
-            if k not in _UNSUPPORTED_SCHEMA_KEYS
-        }
-    if isinstance(schema, list):
-        return [_sanitize_schema(item) for item in schema]
-    return schema
-
 
 class LLMClient:
-    """Async wrapper around OpenRouter with structured output support.
+    """Provider-aware async LLM client with structured output support.
 
-    Initialised once during app lifespan and shared across all workers,
-    the synthesis engine, the revision service, and the critic.
+    The client supports Gemini directly and OpenRouter through its OpenAI-
+    compatible chat completions interface. It is initialized once during app
+    lifespan and shared across workers, synthesis, revision, and critic flows.
     """
 
     def __init__(
         self,
         api_key: str | None = None,
         default_model: str | None = None,
+        provider: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        self._api_key = api_key or settings.OPENROUTER_API_KEY
-        self._default_model = default_model or settings.WORKER_MODEL_NAME
-        self._base_url = base_url or settings.OPENROUTER_BASE_URL
+        self._provider = (provider or getattr(settings, "LLM_PROVIDER", "gemini")).strip().lower()
+        self._api_key = api_key or self._resolve_api_key(self._provider)
+
+        # Robust auto-correction to direct GPT model references to the adopted Anthropic model
+        raw_model = default_model or settings.WORKER_MODEL_NAME
+        if self._effective_provider() != "openai":
+            if raw_model and ("gpt-4.1-mini" in raw_model or "gpt-4o-mini" in raw_model):
+                raw_model = "anthropic/claude-sonnet-4.6"
+        self._default_model = raw_model
+
         self._client: Any | None = None
         self._available = False
-        self._extra_headers = self._build_extra_headers()
+        
+        effective = self._effective_provider()
+        if effective == "qwen":
+            self._base_url = base_url or getattr(settings, "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/api/v1")
+        elif effective == "openai":
+            self._base_url = base_url or getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1")
+        else:
+            self._base_url = base_url or getattr(settings, "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
         self._init_client()
 
-    def _build_extra_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if settings.OPENROUTER_SITE_URL:
-            headers["HTTP-Referer"] = settings.OPENROUTER_SITE_URL
-        if settings.OPENROUTER_APP_NAME:
-            headers["X-Title"] = settings.OPENROUTER_APP_NAME
-        return headers
+    def _resolve_api_key(self, provider: str) -> str | None:
+        if provider == "openrouter":
+            return settings.OPENROUTER_API_KEY
+        if provider == "openai":
+            return settings.OPENAI_API_KEY
+        if provider == "qwen":
+            return settings.DASHSCOPE_API_KEY
+        if provider == "auto":
+            return (
+                settings.OPENROUTER_API_KEY
+                or settings.OPENAI_API_KEY
+                or settings.GEMINI_API_KEY
+                or settings.DASHSCOPE_API_KEY
+            )
+        return settings.GEMINI_API_KEY
+
+    def _effective_provider(self) -> str:
+        if self._provider != "auto":
+            return self._provider
+        if settings.OPENROUTER_API_KEY:
+            return "openrouter"
+        if settings.OPENAI_API_KEY:
+            return "openai"
+        if settings.GEMINI_API_KEY:
+            return "gemini"
+        if settings.DASHSCOPE_API_KEY:
+            return "qwen"
+        return "gemini"
 
     def _init_client(self) -> None:
+        provider = self._effective_provider()
         if not self._api_key:
-            logger.warning("No OPENROUTER_API_KEY configured; LLM client unavailable.")
+            logger.warning("No API key configured for provider '%s'; LLM client unavailable.", provider)
             return
-        try:
-            from openai import AsyncOpenAI
 
-            self._client = AsyncOpenAI(
-                api_key=self._api_key,
-                base_url=self._base_url,
-            )
+        try:
+            if provider == "openrouter":
+                self._client = httpx.AsyncClient(
+                    base_url=self._base_url.rstrip("/"),
+                    headers=self._openrouter_headers(),
+                    timeout=settings.LLM_REQUEST_TIMEOUT,
+                )
+                self._available = True
+                logger.info("LLM client initialised (provider=openrouter, model=%s).", self._default_model)
+                return
+
+            if provider == "openai":
+                self._client = httpx.AsyncClient(
+                    base_url=self._base_url.rstrip("/"),
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=settings.LLM_REQUEST_TIMEOUT,
+                )
+                self._available = True
+                logger.info("LLM client initialised (provider=openai, model=%s).", self._default_model)
+                return
+
+            if provider == "qwen":
+                self._client = httpx.AsyncClient(
+                    base_url=self._base_url.rstrip("/"),
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=settings.LLM_REQUEST_TIMEOUT,
+                )
+                self._available = True
+                logger.info("LLM client initialised (provider=qwen, model=%s).", self._default_model)
+                return
+
+            from google import genai
+
+            self._client = genai.Client(api_key=self._api_key)
             self._available = True
-            logger.info(
-                "LLM client initialised (base_url=%s, model=%s).",
-                self._base_url,
-                self._default_model,
-            )
+            logger.info("LLM client initialised (provider=gemini, model=%s).", self._default_model)
         except Exception as exc:
-            logger.warning("Could not initialise LLM client: %s", exc)
+            logger.warning("Could not initialise LLM client for provider '%s': %s", provider, exc)
+
+    def _openrouter_headers(self) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        if settings.OPENROUTER_HTTP_REFERER:
+            headers["HTTP-Referer"] = settings.OPENROUTER_HTTP_REFERER
+        if settings.OPENROUTER_X_TITLE:
+            headers["X-Title"] = settings.OPENROUTER_X_TITLE
+        return headers
 
     @property
     def available(self) -> bool:
         return self._available and self._client is not None
+
+    @property
+    def provider(self) -> str:
+        return self._effective_provider()
+
+    async def aclose(self) -> None:
+        if self.provider in ("openrouter", "openai", "qwen") and isinstance(self._client, httpx.AsyncClient):
+            await self._client.aclose()
 
     async def generate(
         self,
@@ -102,41 +163,31 @@ class LLMClient:
         content: str,
         response_schema: Type[T] | None = None,
         model_name: str | None = None,
-        max_retries: int = 2,
+        max_retries: int = 4,
     ) -> T | str:
-        """Generate content via OpenRouter.
+        """Generate content from the configured provider.
 
         Args:
             system_prompt: System-level instruction for the model.
             content: The user/document content to process.
-            response_schema: If provided, requests structured JSON output and
-                returns a validated Pydantic model instance.
-            model_name: Override the default model for this call
-                (e.g. ``"anthropic/claude-sonnet-4.5"``).
-            max_retries: Retries on transient errors (429, 500, 503).
-
-        Returns:
-            A validated Pydantic model instance when *response_schema* is set,
-            otherwise the raw response text.
-
-        Raises:
-            RuntimeError: If the client is not available.
-            ValueError: If the model returns empty output.
+            response_schema: Optional Pydantic schema for structured output.
+            model_name: Optional per-call model override.
+            max_retries: Retry count for transient failures.
         """
         if not self.available:
             raise RuntimeError("LLM client is not available (no API key or init failed).")
 
-        model = model_name or self._default_model
-        request_kwargs = self._build_request(system_prompt, content, response_schema)
+        model = self._normalize_model_name(model_name or self._default_model)
+        config = self._build_config(system_prompt, response_schema)
 
         last_exc: Exception | None = None
         for attempt in range(1, max_retries + 2):
             try:
                 response = await asyncio.wait_for(
-                    self._call(model, request_kwargs),
+                    self._call(model, content, config),
                     timeout=settings.LLM_REQUEST_TIMEOUT,
                 )
-                text = self._extract_text(response)
+                text = self._extract_text(response).strip()
                 if not text:
                     raise ValueError("LLM returned empty response.")
 
@@ -149,25 +200,34 @@ class LLMClient:
                 if attempt <= max_retries:
                     wait = 2 ** (attempt - 1)
                     logger.warning(
-                        "LLM call attempt %d/%d failed (%s: %s), retrying in %ds...",
-                        attempt,
-                        max_retries + 1,
-                        exc.__class__.__name__,
-                        exc or "no message",
-                        wait,
+                        "LLM call attempt %d/%d failed (%s), retrying in %ds...",
+                        attempt, max_retries + 1, exc, wait,
                     )
                     await asyncio.sleep(wait)
                 continue
-
             except Exception as exc:
                 err_str = str(exc).lower()
-                is_transient = any(code in err_str for code in ("429", "500", "503", "rate"))
+                is_transient = (
+                    isinstance(exc, httpx.RequestError) or
+                    any(code in err_str for code in ("429", "500", "502", "503", "504", "rate", "timeout"))
+                )
                 if is_transient and attempt <= max_retries:
-                    wait = 2 ** (attempt - 1)
-                    logger.warning(
-                        "LLM transient error attempt %d/%d (%s), retrying in %ds...",
-                        attempt, max_retries + 1, exc, wait,
-                    )
+                    import re
+                    wait = 2.0 ** (attempt - 1)
+                    wait_match = re.search(r"retry in\s+(\d+\.?\d*)s", str(exc), re.IGNORECASE)
+                    if not wait_match:
+                        wait_match = re.search(r"'retryDelay':\s*'(\d+)s'", str(exc), re.IGNORECASE)
+                    if wait_match:
+                        wait = float(wait_match.group(1)) + 1.5
+                        logger.warning(
+                            "Rate limit hit. Dynamic retry delay resolved: sleeping for %.2f seconds.",
+                            wait
+                        )
+                    else:
+                        logger.warning(
+                            "LLM transient error attempt %d/%d (%s), retrying in %.1fs...",
+                            attempt, max_retries + 1, exc, wait,
+                        )
                     await asyncio.sleep(wait)
                     last_exc = exc
                     continue
@@ -175,44 +235,126 @@ class LLMClient:
 
         raise last_exc  # type: ignore[misc]
 
-    async def _call(self, model: str, request_kwargs: dict[str, Any]) -> Any:
-        """Execute the chat completion call."""
-        return await self._client.chat.completions.create(
+    async def _call(self, model: str, content: str, config: dict[str, Any]) -> Any:
+        if self.provider in ("openrouter", "openai", "qwen"):
+            return await self._call_openrouter_or_qwen(model, content, config)
+        return await self._client.aio.models.generate_content(  # type: ignore[union-attr]
             model=model,
-            extra_headers=self._extra_headers or None,
-            **request_kwargs,
+            contents=content,
+            config=config,
         )
 
-    def _build_request(
-        self,
-        system_prompt: str,
-        content: str,
-        response_schema: Type[BaseModel] | None,
-    ) -> dict[str, Any]:
-        """Build the kwargs for the chat completion request."""
-        kwargs: dict[str, Any] = {
+    async def _call_openrouter_or_qwen(self, model: str, content: str, config: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": config["system_instruction"]},
                 {"role": "user", "content": content},
             ],
         }
+
+        response_schema = config.get("response_schema")
         if response_schema is not None:
-            kwargs["response_format"] = {
+            schema_dict = response_schema.model_json_schema()
+            
+            def _clean_schema(obj: Any) -> None:
+                if isinstance(obj, dict):
+                    if obj.get("type") == "object":
+                        obj["additionalProperties"] = False
+                        properties = obj.get("properties") or {}
+                        if properties:
+                            obj["required"] = list(properties.keys())
+                    if obj.get("type") in ("number", "integer"):
+                        obj.pop("maximum", None)
+                        obj.pop("minimum", None)
+                    for val in obj.values():
+                        if isinstance(val, (dict, list)):
+                            _clean_schema(val)
+                elif isinstance(obj, list):
+                    for val in obj:
+                        if isinstance(val, (dict, list)):
+                            _clean_schema(val)
+                            
+            _clean_schema(schema_dict)
+            
+            payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": response_schema.__name__,
-                    "strict": False,
-                    "schema": _sanitize_schema(response_schema.model_json_schema()),
+                    "strict": self.provider == "openai",
+                    "schema": schema_dict,
                 },
             }
-        return kwargs
 
-    @staticmethod
-    def _extract_text(response: Any) -> str:
-        """Pull the first choice's content off a chat completion response."""
-        choices = getattr(response, "choices", None) or []
+        response = await self._client.post("/chat/completions", json=payload)  # type: ignore[union-attr]
+        response.raise_for_status()
+        return response.json()
+
+    def _extract_text(self, response: Any) -> str:
+        if self.provider not in ("openrouter", "openai", "qwen"):
+            return getattr(response, "text", "") or ""
+
+        if not isinstance(response, dict):
+            return ""
+
+        choices = response.get("choices") or []
         if not choices:
             return ""
-        message = getattr(choices[0], "message", None)
-        content = getattr(message, "content", "") if message is not None else ""
-        return (content or "").strip()
+
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(str(item.get("text", "")))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+            return "".join(text_parts)
+        if isinstance(content, dict):
+            return json.dumps(content)
+        return str(content)
+
+    def _normalize_model_name(self, model: str) -> str:
+        if self.provider == "gemini":
+            if "/" in model:
+                model = model.split("/")[-1]
+            if not model.startswith("gemini"):
+                return self._default_model or "gemini-2.5-flash"
+            return model
+        if self.provider == "qwen":
+            if "qwen" not in model.lower():
+                return "qwen3.7-max"
+            return model
+        if self.provider == "openai":
+            # Strip any provider prefix (e.g. "openai/gpt-4.1-mini" -> "gpt-4.1-mini")
+            if "/" in model:
+                return model.split("/", 1)[1]
+            return model
+        if "gpt-4.1-mini" in model or "gpt-4o-mini" in model:
+            return "anthropic/claude-sonnet-4.6"
+        if self.provider == "openrouter" and "/" not in model:
+            if model.startswith("gemini"):
+                return f"google/{model}"
+            if model.startswith("gpt-"):
+                return "anthropic/claude-sonnet-4.6"
+            if model.startswith("claude-"):
+                return f"anthropic/{model}"
+        # Some models use old claude 3.5 sonnet name
+        if model == "anthropic/claude-3.5-sonnet":
+            return "anthropic/claude-sonnet-4.6"
+        return model
+
+    def _build_config(
+        self,
+        system_prompt: str,
+        response_schema: Type[BaseModel] | None,
+    ) -> dict[str, Any]:
+        config: dict[str, Any] = {
+            "system_instruction": system_prompt,
+        }
+        if response_schema is not None:
+            config["response_schema"] = response_schema
+            if self.provider not in ("openrouter", "qwen"):
+                config["response_mime_type"] = "application/json"
+        return config

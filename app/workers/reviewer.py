@@ -166,9 +166,35 @@ class ReviewWorker(BaseWorker):
                 )
             )
 
-        score_values = [
-            result.score for name, result in context.worker_results.items() if name != self.name
-        ]
+        score_values = []
+        research_enabled = settings.ENABLE_WEB_RESEARCH
+        
+        # Check if citations are present in the document
+        has_citations = True
+        if "citation_specialist" in context.worker_results:
+            cit_res = context.worker_results["citation_specialist"]
+            citations_count = cit_res.metadata.get("citations_found", 0) if cit_res.metadata else 0
+            doc_content = context.document_content or ""
+            doc_lower = doc_content.lower()
+            reference_headers = ['references', 'bibliography', 'works cited', 'reference list', 'sources', 'citations']
+            has_ref_section = any(
+                any(line.strip() == h for line in doc_lower.splitlines())
+                for h in reference_headers
+            )
+            if citations_count == 0 and not has_ref_section:
+                has_citations = False
+
+        for name, result in context.worker_results.items():
+            if name == self.name:
+                continue
+            if name == "research_specialist" and not research_enabled:
+                continue
+            if name == "citation_specialist" and not has_citations:
+                continue
+            if name == "plagiarism_specialist" and result.score >= 90.0:
+                continue
+            score_values.append(result.score)
+            
         average_score = sum(score_values) / len(score_values) if score_values else 100.0
 
         if not findings:

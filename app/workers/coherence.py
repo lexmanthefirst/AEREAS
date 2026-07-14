@@ -44,8 +44,16 @@ class CoherenceWorker(BaseWorker):
         paragraphs = self._normalize_paragraphs(raw_paragraphs)
 
         if len(paragraphs) < 2:
+            raw_sentences = self._split_sentences(document)
+            paragraphs = []
+            for i in range(0, len(raw_sentences), 3):
+                group = " ".join(raw_sentences[i:i+3]).strip()
+                if group:
+                    paragraphs.append(group)
+
+        if len(paragraphs) < 2:
             return WorkerResult(
-                score=100.0,
+                score=80.0,
                 findings=["Document too short for coherence analysis (< 2 paragraphs)"],
                 flagged_items=[],
                 proposed_actions=[],
@@ -149,7 +157,7 @@ class CoherenceWorker(BaseWorker):
             lexical_ratio = lexical_links_found / expected_transitions
             score = round(((transition_ratio * 0.6) + (lexical_ratio * 0.4)) * 100, 2)
         else:
-            score = 100.0
+            score = 80.0
 
         if not findings:
             findings.append("Good use of transition words throughout")
